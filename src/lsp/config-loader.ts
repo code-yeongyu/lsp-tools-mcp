@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import { BUILTIN_SERVERS } from "./server-definitions.js";
 import type { ResolvedServer } from "./types.js";
@@ -26,9 +26,19 @@ export interface ServerWithSource extends ResolvedServer {
 
 export function getConfigPaths(): { project: string; user: string } {
 	const cwd = process.cwd();
+	const projectOverride = process.env.LSP_TOOLS_MCP_PROJECT_CONFIG;
+	const userOverride = process.env.LSP_TOOLS_MCP_USER_CONFIG;
 	return {
-		project: join(cwd, ".codex", "lsp-client.json"),
-		user: join(homedir(), ".codex", "lsp-client.json"),
+		project: projectOverride
+			? isAbsolute(projectOverride)
+				? projectOverride
+				: join(cwd, projectOverride)
+			: join(cwd, ".codex", "lsp-client.json"),
+		user: userOverride
+			? isAbsolute(userOverride)
+				? userOverride
+				: join(homedir(), userOverride)
+			: join(homedir(), ".codex", "lsp-client.json"),
 	};
 }
 
