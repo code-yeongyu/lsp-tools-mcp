@@ -3,6 +3,7 @@ import { extname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { LspClientConnection } from "./connection.js";
+import { LspRequestTimeoutError } from "./errors.js";
 import { getLanguageId } from "./language-mappings.js";
 import type {
 	Diagnostic,
@@ -18,12 +19,15 @@ import type {
 
 const POST_OPEN_DELAY_MS = 1000;
 const POST_DIAGNOSTICS_WAIT_MS = 500;
+const DIAGNOSTIC_PULL_TIMEOUT_RETRY_COOLDOWN_MS = 60_000;
 
 export class LspClient extends LspClientConnection {
 	private readonly openedFiles = new Set<string>();
 	private readonly documentVersions = new Map<string, number>();
 	private readonly lastSyncedText = new Map<string, string>();
 	private readonly diagnosticPullErrors: Error[] = [];
+	private diagnosticPullUnsupported = false;
+	private diagnosticPullDisabledUntilMs = 0;
 
 	getDiagnosticPullErrors(): readonly Error[] {
 		return this.diagnosticPullErrors;
@@ -120,10 +124,29 @@ export class LspClient extends LspClientConnection {
 		return /unsupported|not supported|method not found|unknown request/i.test(error.message);
 	}
 
+	private serverSupportsDiagnosticPull(): boolean {
+		return (
+			this.serverCapabilities.diagnosticProvider !== undefined && this.serverCapabilities.diagnosticProvider !== null
+		);
+	}
+
+	private canRequestDiagnosticPull(): boolean {
+		return (
+			this.serverSupportsDiagnosticPull() &&
+			!this.diagnosticPullUnsupported &&
+			Date.now() >= this.diagnosticPullDisabledUntilMs
+		);
+	}
+
 	async diagnostics(filePath: string): Promise<{ items: Diagnostic[] }> {
 		const absPath = resolve(filePath);
 		const uri = pathToFileURL(absPath).href;
 		await this.openFile(absPath);
+
+		if (!this.canRequestDiagnosticPull()) {
+			return { items: this.getStoredDiagnostics(uri) };
+		}
+
 		await new Promise((r) => setTimeout(r, POST_DIAGNOSTICS_WAIT_MS));
 
 		try {
@@ -134,7 +157,11 @@ export class LspClient extends LspClientConnection {
 				return { items: result.items };
 			}
 		} catch (error) {
-			if (!this.isUnsupportedDiagnosticPullError(error)) {
+			if (this.isUnsupportedDiagnosticPullError(error)) {
+				this.diagnosticPullUnsupported = true;
+			} else if (error instanceof LspRequestTimeoutError) {
+				this.diagnosticPullDisabledUntilMs = Date.now() + DIAGNOSTIC_PULL_TIMEOUT_RETRY_COOLDOWN_MS;
+			} else {
 				this.diagnosticPullErrors.push(error instanceof Error ? error : new Error(String(error)));
 			}
 		}
