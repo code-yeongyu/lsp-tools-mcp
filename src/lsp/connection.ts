@@ -4,10 +4,21 @@ import { LspClientTransport } from "./transport.js";
 
 const INITIALIZE_SETTLE_MS = 300;
 
+export interface LspServerCapabilities {
+	diagnosticProvider?: unknown;
+	[key: string]: unknown;
+}
+
+interface InitializeResult {
+	capabilities?: LspServerCapabilities;
+}
+
 export class LspClientConnection extends LspClientTransport {
+	protected serverCapabilities: LspServerCapabilities = {};
+
 	async initialize(): Promise<void> {
 		const rootUri = pathToFileURL(this.root).href;
-		await this.sendRequest("initialize", {
+		const result = await this.sendRequest<InitializeResult>("initialize", {
 			processId: process.pid,
 			rootUri,
 			rootPath: this.root,
@@ -59,6 +70,7 @@ export class LspClientConnection extends LspClientTransport {
 			},
 			initializationOptions: this.server.initialization,
 		});
+		this.serverCapabilities = result.capabilities ?? {};
 		await this.sendNotification("initialized");
 		await this.sendNotification("workspace/didChangeConfiguration", {
 			settings: { json: { validate: { enable: true } } },
