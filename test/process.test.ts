@@ -114,6 +114,35 @@ describe("createSpawnCommand", () => {
 			shell: false,
 		});
 	});
+
+	// regression: issue #4262 — when an extensionless shebang script sits next to its
+	// `.bat`/`.cmd` wrapper (e.g. jdtls + jdtls.bat), Windows must pick the wrapper.
+	// Windows ignores shebangs, so executing the extensionless file directly fails
+	// with UV_ENOENT.
+	it("#given a .bat wrapper next to an extensionless shebang script #when resolving on win32 #then prefers the wrapper", () => {
+		// given
+		const binaryDirectory = mkdtempSync(join(tmpdir(), "codex-lsp-jdtls-"));
+		tempDirectories.push(binaryDirectory);
+		mkdirSync(binaryDirectory, { recursive: true });
+		// extensionless Python script that Windows can't exec directly
+		writeFileSync(join(binaryDirectory, "jdtls"), "#!/usr/bin/env python3\nprint('hello')\n");
+		const wrapperPath = join(binaryDirectory, "jdtls.bat");
+		writeFileSync(wrapperPath, "@echo off\r\nrem launches jdtls via the right JDK\r\n");
+
+		// when: PATHEXT lists the wrapper extensions (lowercase here so the test is
+		// order-of-resolution focused, not filesystem-case-sensitivity focused)
+		const prepared = createSpawnCommand(["jdtls", "--stdio"], "win32", "cmd.exe", {
+			PATH: binaryDirectory,
+			PATHEXT: ".com;.exe;.bat;.cmd",
+		});
+
+		// then: the .bat wrapper wins, and it goes through cmd /d /s /c
+		expect(prepared).toEqual({
+			command: "cmd.exe",
+			args: ["/d", "/s", "/c", wrapperPath, "--stdio"],
+			shell: false,
+		});
+	});
 });
 
 describe("spawnProcess", () => {

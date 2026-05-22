@@ -126,7 +126,11 @@ function getWindowsPathExtensions(env: Record<string, string | undefined>): stri
 		.map((extension) => extension.trim())
 		.filter(Boolean)
 		.map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
-	return [...new Set(["", ...extensions, ".exe", ".cmd", ".bat"])];
+	// Match cmd.exe's PATH lookup: PATHEXT extensions first, then the literal
+	// (extensionless) name. Otherwise an extensionless shebang script next to its
+	// .bat/.cmd wrapper (e.g. jdtls + jdtls.bat) wins on Windows and fails with
+	// UV_ENOENT because Windows can't honor the shebang. Issue #4262.
+	return [...new Set([...extensions, ".exe", ".cmd", ".bat", ""])];
 }
 
 function resolveWindowsCommand(command: string, env: Record<string, string | undefined>): string {
