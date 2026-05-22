@@ -126,7 +126,7 @@ function getWindowsPathExtensions(env: Record<string, string | undefined>): stri
 		.map((extension) => extension.trim())
 		.filter(Boolean)
 		.map((extension) => (extension.startsWith(".") ? extension : `.${extension}`));
-	return [...new Set(["", ...extensions, ".exe", ".cmd", ".bat"])];
+	return [...new Set([...extensions, ".exe", ".cmd", ".bat", ""])];
 }
 
 function resolveWindowsCommand(command: string, env: Record<string, string | undefined>): string {
