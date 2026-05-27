@@ -1,6 +1,8 @@
+import { PassThrough } from "node:stream";
+
 import { describe, expect, it } from "vitest";
 
-import { handleLspMcpRequest } from "../src/mcp.js";
+import { handleLspMcpRequest, runMcpStdioServer } from "../src/mcp.js";
 
 describe("lsp MCP server", () => {
 	it("responds to initialize with tool capabilities", async () => {
@@ -78,5 +80,21 @@ describe("lsp MCP server", () => {
 			},
 		});
 		expect(response?.result?.content?.[0]?.text).toContain("Configured LSP servers");
+	});
+
+	it("#given idle stdio connection #when no request arrives before timeout #then server exits through idle callback", async () => {
+		const input = new PassThrough();
+		const output = new PassThrough();
+		let idleCallCount = 0;
+
+		await runMcpStdioServer(input, output, {
+			idleTimeoutMs: 1,
+			onIdleTimeout: () => {
+				idleCallCount++;
+				input.end();
+			},
+		});
+
+		expect(idleCallCount).toBe(1);
 	});
 });
