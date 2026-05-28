@@ -67,6 +67,12 @@ export async function handleLspMcpRequest(input: unknown): Promise<JsonRpcRespon
 	if (method === "tools/list") {
 		return successResponse(id, { tools: LSP_MCP_TOOLS.map(describeTool) });
 	}
+	if (method === "resources/list") {
+		return successResponse(id, { resources: [] });
+	}
+	if (method === "resources/templates/list") {
+		return successResponse(id, { resourceTemplates: [] });
+	}
 
 	if (method === "tools/call") {
 		return handleToolCall(id, input["params"]);
@@ -124,13 +130,45 @@ export async function runMcpStdioServer(
 			const response = await handleLspMcpRequest(parsed);
 			if (response) {
 				output.write(`${JSON.stringify(response)}\n`);
-				log("response", { id: String(response.id), method, is_error: response.error !== undefined });
+				const resultIsError = response.result?.isError === true;
+				const resultHasActionableError = hasActionableToolError(response.result);
+				log("response", {
+					id: String(response.id),
+					method,
+					is_error: response.error !== undefined,
+					result_is_error: resultIsError,
+					actionable_error: resultHasActionableError,
+				});
+				if (resultIsError || resultHasActionableError) {
+					const message = actionableToolMessage(response.result);
+					log("tool_error", {
+						id: String(response.id),
+						method,
+						...(message === undefined ? {} : { message: message.slice(0, 1_000) }),
+					});
+				}
 			}
 		}
 	} finally {
 		clearIdleTimer();
 		log("stdio_stopped");
 	}
+}
+
+function hasActionableToolError(result: JsonRpcResult | undefined): boolean {
+	if (result === undefined) return false;
+	if (result.isError === true) return true;
+	const details = result["details"];
+	return isRecord(details) && typeof details["error"] === "string";
+}
+
+function actionableToolMessage(result: JsonRpcResult | undefined): string | undefined {
+	const details = result?.["details"];
+	if (isRecord(details) && typeof details["error"] === "string") {
+		return details["error"];
+	}
+	const firstContent = result?.content?.[0];
+	return firstContent?.text;
 }
 
 async function handleToolCall(id: JsonRpcId, params: unknown): Promise<JsonRpcResponse> {

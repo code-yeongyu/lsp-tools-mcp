@@ -6,14 +6,14 @@ Standalone Language Server Protocol tools exposed as a stdio MCP server.
 
 ## Used By
 
-This repository is the upstream source of truth for two downstream plugins. Both consume it as a git submodule:
+This package is the upstream source of truth for two downstream plugins. Codex consumes the repository-level package directly; OpenCode consumes the same runtime as a built-in MCP package.
 
 | Project | Path | Role |
 |---------|------|------|
-| **[codex-lsp](https://github.com/code-yeongyu/codex-lsp)** | `packages/lsp-tools-mcp/` | Codex plugin that ships these LSP MCP tools plus a Codex-specific PostToolUse diagnostics hook. |
+| **[codex-lsp](https://github.com/code-yeongyu/codex-lsp)** | `packages/lsp-tools-mcp/` | Codex plugin that reuses these LSP MCP tools plus a Codex-specific PostToolUse diagnostics hook. |
 | **[oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)** (a.k.a. `oh-my-opencode`) | `vendor/lsp-tools-mcp/` | OpenCode plugin that registers this server as a built-in Tier-1 stdio MCP. Exposes `lsp_diagnostics`, `lsp_goto_definition`, `lsp_find_references`, `lsp_symbols`, `lsp_prepare_rename`, `lsp_rename`, and `lsp_status` to all agents. |
 
-If you fix or extend the LSP runtime here, both downstreams pick up the change by bumping the submodule pointer. Do not fork the runtime into a downstream; land changes here instead.
+If you fix or extend the LSP runtime here, downstream adapters should reuse this package. Do not fork the runtime into a downstream; land changes here instead.
 
 ## Quick Start
 
