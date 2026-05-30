@@ -13,7 +13,7 @@ async function main(): Promise<void> {
 			return;
 		}
 
-		stderr.write("Usage: lsp-tools-mcp [mcp]\n");
+		stderr.write("Usage: omo-lsp [mcp]\n");
 		process.exitCode = 2;
 	} finally {
 		await disposeDefaultLspManager();

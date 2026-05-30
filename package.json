@@ -22,7 +22,7 @@
 		"nodejs"
 	],
 	"bin": {
-		"lsp-tools-mcp": "./dist/cli.js"
+		"omo-lsp": "./dist/cli.js"
 	},
 	"files": [
 		"dist",
