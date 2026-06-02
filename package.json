@@ -41,7 +41,7 @@
 		"check": "tsc --noEmit && biome check . && npm run build"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.4.15",
+		"@biomejs/biome": "2.4.16",
 		"@types/node": "^25.7.0",
 		"typescript": "^6.0.3",
 		"vitest": "^4.1.5"
