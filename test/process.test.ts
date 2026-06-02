@@ -114,6 +114,29 @@ describe("createSpawnCommand", () => {
 			shell: false,
 		});
 	});
+
+	it("#given windows PATH has extensionless script and bat wrapper #when resolving spawn command #then it prefers the wrapper", () => {
+		// given
+		const binaryDirectory = mkdtempSync(join(tmpdir(), "codex-lsp-bin-"));
+		tempDirectories.push(binaryDirectory);
+		mkdirSync(binaryDirectory, { recursive: true });
+		writeFileSync(join(binaryDirectory, "jdtls"), "#!/usr/bin/env python3\n");
+		const shimPath = join(binaryDirectory, "jdtls.bat");
+		writeFileSync(shimPath, "@echo off\n");
+
+		// when
+		const prepared = createSpawnCommand(["jdtls", "--stdio"], "win32", "cmd.exe", {
+			PATH: binaryDirectory,
+			PATHEXT: ".bat;.cmd",
+		});
+
+		// then
+		expect(prepared).toEqual({
+			command: "cmd.exe",
+			args: ["/d", "/s", "/c", shimPath, "--stdio"],
+			shell: false,
+		});
+	});
 });
 
 describe("spawnProcess", () => {
