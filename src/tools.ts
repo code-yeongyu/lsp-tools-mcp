@@ -27,8 +27,8 @@ import type {
 	SymbolInfo,
 	WorkspaceEdit,
 } from "./lsp/types.js";
-import { handleMissingDependencyError } from "./lsp/utils.js";
 import { type ApplyResult, applyWorkspaceEdit } from "./lsp/workspace-edit.js";
+import { missingDependencyResult } from "./missing-dependency-result.js";
 
 export interface TextContent {
 	type: "text";
@@ -279,20 +279,15 @@ export async function executeLspDiagnostics(
 		};
 		return text(output, details);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			const details: LspDiagnosticsDetails = {
-				filePath,
-				severity,
-				mode: "file",
-				diagnostics: [],
-				totalDiagnostics: 0,
-				truncated: false,
-				error: message,
-				errorKind: "missing_dependency",
-			};
-			return text(message, details);
-		}
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			severity,
+			mode: "file",
+			diagnostics: [],
+			totalDiagnostics: 0,
+			truncated: false,
+		} satisfies Omit<LspDiagnosticsDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
@@ -317,17 +312,13 @@ async function executeLspGotoDefinition(
 		if (locations.length === 0) return text("No definition found", details);
 		return text(locations.map(formatLocation).join("\n"), details);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			return text(message, {
-				filePath,
-				line,
-				character,
-				locations: [],
-				error: message,
-				errorKind: "missing_dependency",
-			});
-		}
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			line,
+			character,
+			locations: [],
+		} satisfies Omit<LspGotoDefinitionDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
@@ -367,19 +358,15 @@ async function executeLspFindReferences(
 		].join("\n");
 		return text(output, details);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			return text(message, {
-				filePath,
-				line,
-				character,
-				references: [],
-				totalReferences: 0,
-				truncated: false,
-				error: message,
-				errorKind: "missing_dependency",
-			});
-		}
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			line,
+			character,
+			references: [],
+			totalReferences: 0,
+			truncated: false,
+		} satisfies Omit<LspFindReferencesDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
@@ -423,20 +410,16 @@ async function executeLspSymbols(params: Record<string, unknown>, signal?: Abort
 		);
 		return formatSymbolsResult(filePath, scope, symbols, limit);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			const query = optionalString(params, "query");
-			return text(message, {
-				filePath,
-				scope,
-				symbols: [],
-				totalSymbols: 0,
-				truncated: false,
-				error: message,
-				errorKind: "missing_dependency",
-				...(query === undefined ? {} : { query }),
-			});
-		}
+		const query = optionalString(params, "query");
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			scope,
+			symbols: [],
+			totalSymbols: 0,
+			truncated: false,
+			...(query === undefined ? {} : { query }),
+		} satisfies Omit<LspSymbolsDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
@@ -490,17 +473,13 @@ async function executeLspPrepareRename(
 		const details: LspPrepareRenameDetails = { filePath, line, character, result };
 		return text(formatPrepareRenameResult(result), details);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			return text(message, {
-				filePath,
-				line,
-				character,
-				result: null,
-				error: message,
-				errorKind: "missing_dependency",
-			});
-		}
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			line,
+			character,
+			result: null,
+		} satisfies Omit<LspPrepareRenameDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
@@ -522,19 +501,15 @@ async function executeLspRename(params: Record<string, unknown>, signal?: AbortS
 		const details: LspRenameDetails = { filePath, line, character, newName, apply, edit };
 		return text(formatApplyResult(apply), details, !apply.success);
 	} catch (error) {
-		const message = handleMissingDependencyError(error);
-		if (message) {
-			return text(message, {
-				filePath,
-				line,
-				character,
-				newName,
-				apply: null,
-				edit: null,
-				error: message,
-				errorKind: "missing_dependency",
-			});
-		}
+		const missingDependency = missingDependencyResult(error, {
+			filePath,
+			line,
+			character,
+			newName,
+			apply: null,
+			edit: null,
+		} satisfies Omit<LspRenameDetails, "error" | "errorKind">);
+		if (missingDependency) return missingDependency;
 		throw error;
 	}
 }
