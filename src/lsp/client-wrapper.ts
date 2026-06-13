@@ -111,7 +111,7 @@ export async function withLspClient<T>(
 	}
 
 	const ext = extname(absPath);
-	const result = findServerForExtension(ext);
+	const result = findServerForExtension(ext, { filePath: absPath });
 	if (result.status !== "found") {
 		throw new LspServerLookupError(formatServerLookupError(result));
 	}

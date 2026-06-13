@@ -73,7 +73,7 @@ export async function aggregateDiagnosticsForDirectory(
 		throw new LspInvalidPathError(`Directory does not exist: ${absDir}`);
 	}
 
-	const serverResult = findServerForExtension(extension);
+	const serverResult = findServerForExtension(extension, { filePath: absDir });
 	if (serverResult.status !== "found") {
 		throw new LspServerLookupError(formatServerLookupError(serverResult));
 	}
