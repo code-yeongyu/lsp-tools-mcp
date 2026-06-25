@@ -12,6 +12,27 @@ export function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+// Matches the leading windows drive in a file uri: file:///C:/ or file:///c%3A/
+const WINDOWS_DRIVE_PREFIX = /^(file:\/\/\/)([a-zA-Z])(?::|%3a)\//i;
+
+// Reconciles file:///C:/ (pathToFileURL) with file:///c%3A/ (publishDiagnostics) on
+// Windows. Posix uris are left untouched so case-sensitive paths are not collapsed.
+export function normalizeDiagnosticUri(uri: string): string {
+	if (process.platform !== "win32") return uri;
+
+	let href = uri;
+	try {
+		href = new URL(uri).href;
+	} catch {
+		href = uri;
+	}
+
+	return href.replace(
+		WINDOWS_DRIVE_PREFIX,
+		(_match, prefix: string, drive: string) => `${prefix}${drive.toLowerCase()}:/`,
+	);
+}
+
 export function formatKnownLspStartupFailure(error: unknown): string | null {
 	if (!(error instanceof LspProcessExitedError)) return null;
 	if (error.serverId !== "rust") return null;
