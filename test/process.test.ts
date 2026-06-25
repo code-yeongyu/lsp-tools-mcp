@@ -66,9 +66,10 @@ describe("createSpawnCommand", () => {
 	it("#given windows executable command #when building spawn command #then it avoids shell mode", () => {
 		// given
 		const command = ["typescript-language-server", "--stdio"];
+		const env = { PATH: "", PATHEXT: ".cmd;.exe" };
 
 		// when
-		const prepared = createSpawnCommand(command, "win32", "cmd.exe");
+		const prepared = createSpawnCommand(command, "win32", "cmd.exe", env);
 
 		// then
 		expect(prepared).toEqual({
@@ -81,9 +82,10 @@ describe("createSpawnCommand", () => {
 	it("#given windows cmd shim #when building spawn command #then it uses cmd only for the shim", () => {
 		// given
 		const command = ["typescript-language-server.cmd", "--stdio"];
+		const env = { PATH: "", PATHEXT: ".cmd;.exe" };
 
 		// when
-		const prepared = createSpawnCommand(command, "win32", "cmd.exe");
+		const prepared = createSpawnCommand(command, "win32", "cmd.exe", env);
 
 		// then
 		expect(prepared).toEqual({
