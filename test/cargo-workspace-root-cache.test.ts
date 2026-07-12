@@ -158,6 +158,28 @@ describe("resolveCargoWorkspaceRoot cache", () => {
 		expect(resolved).toBe(memberDir);
 	});
 
+	it("does not cache manifests outside the canonical workspace root", async () => {
+		// Given
+		const workspaceAManifest = write("workspace-a/Cargo.toml", "[workspace]\nmembers = []\n");
+		const workspaceAFile = write("workspace-a/src/lib.rs", "");
+		const workspaceBManifest = write("workspace-b/Cargo.toml", "[workspace]\nmembers = []\n");
+		const workspaceBFile = write("workspace-b/src/lib.rs", "");
+		const workspaceA = dirname(workspaceAManifest);
+		const workspaceB = dirname(workspaceBManifest);
+		const metadataLoader = vi
+			.fn<CargoMetadataLoader>()
+			.mockResolvedValueOnce(cargoMetadata(workspaceA, [workspaceAManifest, workspaceBManifest]))
+			.mockResolvedValueOnce(cargoMetadata(workspaceB, [workspaceBManifest]));
+
+		// When
+		const resolvedA = await resolveCargoWorkspaceRoot(workspaceAFile, { cargoMetadataLoader: metadataLoader });
+		const resolvedB = await resolveCargoWorkspaceRoot(workspaceBFile, { cargoMetadataLoader: metadataLoader });
+
+		// Then
+		expect([resolvedA, resolvedB]).toEqual([workspaceA, workspaceB]);
+		expect(metadataLoader).toHaveBeenCalledTimes(2);
+	});
+
 	it("bypasses a recent metadata failure when an ancestor workspace manifest changes", async () => {
 		// Given
 		write("Cargo.toml", '[workspace]\nmembers = ["crates/a"]\nresolver = "2"\n');

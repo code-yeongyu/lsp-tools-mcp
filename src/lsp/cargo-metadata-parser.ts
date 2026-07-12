@@ -1,5 +1,5 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 interface ParsedCargoMetadata {
 	readonly workspaceRoot: string;
@@ -41,6 +41,14 @@ function canReadFile(path: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+function isContainedPath(root: string, path: string): boolean {
+	const relativePath = relative(root, path);
+	return (
+		relativePath === "" ||
+		(!isAbsolute(relativePath) && relativePath !== ".." && !relativePath.startsWith(`..${sep}`))
+	);
 }
 
 function parseCargoMetadata(output: string): ParsedCargoMetadata | undefined {
@@ -88,6 +96,7 @@ function validateCargoMetadata(
 	const rootManifestPath = canonicalManifest(join(workspaceRoot, "Cargo.toml"));
 	const requestedManifest = canonicalManifest(requestedManifestPath);
 	if (rootManifestPath === undefined || requestedManifest === undefined) return undefined;
+	if (!isContainedPath(workspaceRoot, requestedManifest)) return undefined;
 	if (!canReadFile(rootManifestPath)) return undefined;
 
 	const memberManifestPaths: string[] = [];
@@ -95,6 +104,7 @@ function validateCargoMetadata(
 	for (const manifestPath of metadata.memberManifestPaths) {
 		const canonicalPath = canonicalManifest(manifestPath);
 		if (canonicalPath === undefined || !canReadFile(canonicalPath)) return undefined;
+		if (!isContainedPath(workspaceRoot, canonicalPath)) return undefined;
 		if (!members.has(canonicalPath)) {
 			members.add(canonicalPath);
 			memberManifestPaths.push(canonicalPath);
