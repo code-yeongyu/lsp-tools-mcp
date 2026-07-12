@@ -156,7 +156,7 @@ export async function aggregateDiagnosticsForDirectory(
 	const allDiagnostics: FileDiagnostic[] = [];
 	const fileErrors: { file: string; error: string }[] = [];
 
-	const client = await awaitWithAbort(manager.getClient(root, server, signal), signal);
+	const client = await manager.getClient(root, server, signal);
 	try {
 		for (const file of filesToProcess) {
 			throwIfAborted(signal);
