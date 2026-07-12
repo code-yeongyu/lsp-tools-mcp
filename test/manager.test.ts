@@ -98,29 +98,33 @@ describe("LspManager", () => {
 		await manager.stopAll();
 	});
 
-	it("#given active client #when signal cleanup runs #then client is stopped and handlers unregister", async () => {
+	it("#given active clients in multiple managers #when signal cleanup runs #then one handler stops all clients", async () => {
 		// given
 		const beforeSigterm = process.listeners("SIGTERM");
-		const { manager, clients } = setupManager();
+		const first = setupManager();
+		const second = setupManager();
 		const server = makeServer("typescript");
 
 		try {
-			await manager.getClient("/root/a", server);
-			manager.releaseClient("/root/a", server.id);
+			await first.manager.getClient("/root/a", server);
+			await second.manager.getClient("/root/b", server);
+			first.manager.releaseClient("/root/a", server.id);
+			second.manager.releaseClient("/root/b", server.id);
 
 			// when
 			const listener = findAddedListener("SIGTERM", beforeSigterm);
 
 			// then
 			expect(listener).toBeDefined();
+			expect(process.listeners("SIGTERM").filter((candidate) => !beforeSigterm.includes(candidate))).toHaveLength(1);
 			listener?.();
 			await new Promise((resolve) => setTimeout(resolve, 0));
 
-			expect(clients[0]?.stopCallCount).toBe(1);
-			expect(manager.clientCount()).toBe(0);
+			expect([first.clients[0]?.stopCallCount, second.clients[0]?.stopCallCount]).toEqual([1, 1]);
+			expect([first.manager.clientCount(), second.manager.clientCount()]).toEqual([0, 0]);
 			expect(process.listeners("SIGTERM")).toEqual(beforeSigterm);
 		} finally {
-			await manager.stopAll();
+			await Promise.all([first.manager.stopAll(), second.manager.stopAll()]);
 		}
 	});
 });

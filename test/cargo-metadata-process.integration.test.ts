@@ -1,3 +1,4 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import {
 	existsSync,
 	linkSync,
@@ -17,8 +18,10 @@ import { defaultCargoMetadataLoader } from "../src/lsp/cargo-metadata-process.js
 
 const PROCESS_EXIT_TIMEOUT_MS = 5_000;
 const FIXTURE_READY_TIMEOUT_MS = 3_000;
+const CLI_EXIT_TIMEOUT_MS = 2_000;
 const CARGO_METADATA_PROCESS_SIGNALS: readonly NodeJS.Signals[] =
 	process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGBREAK"] : ["SIGINT", "SIGTERM"];
+const CLI_TERMINATION_SIGNALS: readonly NodeJS.Signals[] = process.platform === "win32" ? [] : ["SIGTERM", "SIGINT"];
 
 type ProcessTreePids = {
 	readonly wrapper: number;
@@ -81,6 +84,16 @@ function killPidBestEffort(pid: number): void {
 	} catch (error) {
 		if (!isMissingProcessError(error)) throw error;
 	}
+}
+
+function isChildAlive(child: ChildProcess): boolean {
+	return child.exitCode === null && child.signalCode === null;
+}
+
+async function stopChildAfterFailure(child: ChildProcess): Promise<void> {
+	if (!isChildAlive(child)) return;
+	child.kill("SIGKILL");
+	await expect.poll(() => isChildAlive(child), { timeout: PROCESS_EXIT_TIMEOUT_MS, interval: 25 }).toBe(false);
 }
 
 async function expectProcessTreeGone(pids: ProcessTreePids): Promise<void> {
@@ -208,6 +221,65 @@ describe("defaultCargoMetadataLoader process lifecycle", () => {
 			await expect(loading).rejects.toMatchObject({ name: "AbortError" });
 			await expectProcessTreeGone(pids);
 			expect(process.listeners(signal)).toEqual(beforeListeners);
+		}, 10_000);
+	}
+
+	for (const signal of CLI_TERMINATION_SIGNALS) {
+		it(`terminates the MCP CLI by ${signal} after cleaning the complete Cargo process tree`, async () => {
+			// Given
+			const sourceDirectory = join(fixtureDirectory, "src");
+			mkdirSync(sourceDirectory);
+			writeFileSync(join(fixtureDirectory, "Cargo.toml"), '[package]\nname = "signal-test"\nversion = "0.1.0"\n');
+			const rustFile = join(sourceDirectory, "lib.rs");
+			writeFileSync(rustFile, "pub fn value() -> i32 { 1 }\n");
+			const rustAnalyzer = join(binaryDirectory, "rust-analyzer");
+			symlinkSync(process.execPath, rustAnalyzer);
+			const projectConfig = join(fixtureDirectory, "lsp-client.json");
+			writeFileSync(
+				projectConfig,
+				JSON.stringify({ lsp: { rust: { command: ["rust-analyzer"], extensions: [".rs"], priority: 100 } } }),
+			);
+			const cli = spawn(process.execPath, [join(process.cwd(), "dist/cli.js"), "mcp"], {
+				env: {
+					...process.env,
+					PATH: `${binaryDirectory}${delimiter}${process.env["PATH"] ?? ""}`,
+					NODE_OPTIONS: `--require=${JSON.stringify(preloadPath)}`,
+					LSP_TOOLS_MCP_PROJECT_CONFIG: projectConfig,
+					LSP_TOOLS_MCP_USER_CONFIG: join(fixtureDirectory, "missing-user-config.json"),
+				},
+				stdio: ["pipe", "ignore", "pipe"],
+			});
+
+			try {
+				cli.stdin?.write(
+					`${JSON.stringify({
+						jsonrpc: "2.0",
+						id: 1,
+						method: "tools/call",
+						params: { name: "diagnostics", arguments: { filePath: rustFile } },
+					})}\n`,
+				);
+				const pids = await waitForProcessTree();
+				expect({
+					parent: isChildAlive(cli),
+					wrapper: isPidAlive(pids.wrapper),
+					descendant: isPidAlive(pids.descendant),
+				}).toEqual({
+					parent: true,
+					wrapper: true,
+					descendant: true,
+				});
+
+				// When
+				cli.kill(signal);
+
+				// Then
+				await expect.poll(() => isChildAlive(cli), { timeout: CLI_EXIT_TIMEOUT_MS, interval: 25 }).toBe(false);
+				expect(cli.signalCode).toBe(signal);
+				await expectProcessTreeGone(pids);
+			} finally {
+				await stopChildAfterFailure(cli);
+			}
 		}, 10_000);
 	}
 });

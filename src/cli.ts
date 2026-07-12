@@ -2,6 +2,7 @@
 import { argv, stderr } from "node:process";
 
 import { disposeDefaultLspManager } from "./lsp/manager.js";
+import { installProcessSignalCleanup } from "./lsp/process-signal-cleanup.js";
 import { runMcpStdioServer } from "./mcp.js";
 import { writeMcpLifecycleLog } from "./mcp-lifecycle-log.js";
 
@@ -10,13 +11,20 @@ async function main(): Promise<void> {
 
 	try {
 		if (command === "mcp") {
-			await runMcpStdioServer(process.stdin, process.stdout, {
-				log: writeMcpLifecycleLog,
-				onIdleTimeout: async () => {
-					await disposeDefaultLspManager();
-					process.exit(0);
-				},
+			const removeSignalCleanup = installProcessSignalCleanup(disposeDefaultLspManager, {
+				terminateParent: true,
 			});
+			try {
+				await runMcpStdioServer(process.stdin, process.stdout, {
+					log: writeMcpLifecycleLog,
+					onIdleTimeout: async () => {
+						await disposeDefaultLspManager();
+						process.exit(0);
+					},
+				});
+			} finally {
+				removeSignalCleanup();
+			}
 			return;
 		}
 

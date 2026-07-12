@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile } from "node:child_process";
 
 import { terminateProcessTree } from "./process.js";
+import { installProcessSignalCleanup } from "./process-signal-cleanup.js";
 
 const CARGO_METADATA_MAX_BUFFER = 64 * 1024 * 1024;
 const CARGO_METADATA_TIMEOUT_MS = 10_000;
@@ -10,10 +11,6 @@ export type CargoMetadataLoader = (manifestPath: string, signal?: AbortSignal) =
 const activeCargoMetadataControllers = new Set<AbortController>();
 let removeProcessSignalHandlers: (() => void) | undefined;
 
-function processSignals(): readonly NodeJS.Signals[] {
-	return process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGBREAK"] : ["SIGINT", "SIGTERM"];
-}
-
 function abortActiveCargoMetadata(): void {
 	for (const controller of activeCargoMetadataControllers) {
 		if (!controller.signal.aborted) controller.abort();
@@ -22,16 +19,7 @@ function abortActiveCargoMetadata(): void {
 
 function ensureProcessSignalHandlers(): void {
 	if (removeProcessSignalHandlers !== undefined) return;
-	const handler = () => abortActiveCargoMetadata();
-	const signals = processSignals();
-	for (const signal of signals) {
-		process.on(signal, handler);
-	}
-	removeProcessSignalHandlers = () => {
-		for (const signal of signals) {
-			process.removeListener(signal, handler);
-		}
-	};
+	removeProcessSignalHandlers = installProcessSignalCleanup(abortActiveCargoMetadata);
 }
 
 function releaseCargoMetadataController(controller: AbortController): void {
