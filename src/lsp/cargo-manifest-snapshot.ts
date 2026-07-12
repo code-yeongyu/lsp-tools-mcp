@@ -1,28 +1,36 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { canonicalManifest } from "./cargo-metadata-parser.js";
-
 export interface ManifestSnapshot {
 	readonly path: string;
-	readonly content: string;
+	readonly exists: boolean;
+	readonly content: string | undefined;
 }
 
-export function readManifestSnapshot(path: string): ManifestSnapshot | undefined {
+function isMissingManifestError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const code = "code" in error ? error.code : undefined;
+	return code === "ENOENT" || code === "ENOTDIR";
+}
+
+export function readManifestSnapshot(path: string, allowMissing = false): ManifestSnapshot | undefined {
 	try {
-		return { path, content: readFileSync(path, "utf8") };
-	} catch {
+		return { path, exists: true, content: readFileSync(path, "utf8") };
+	} catch (error) {
+		if (allowMissing && isMissingManifestError(error)) {
+			return { path, exists: false, content: undefined };
+		}
 		return undefined;
 	}
 }
 
 export function snapshotsAreFresh(snapshots: readonly ManifestSnapshot[]): boolean {
 	for (const snapshot of snapshots) {
-		try {
-			if (readFileSync(snapshot.path, "utf8") !== snapshot.content) return false;
-		} catch {
-			return false;
-		}
+		const candidate = readManifestSnapshot(snapshot.path, true);
+		if (candidate === undefined) return false;
+		if (candidate.exists !== snapshot.exists) return false;
+		if (!candidate.exists) continue;
+		if (candidate.content !== snapshot.content) return false;
 	}
 	return true;
 }
@@ -33,8 +41,8 @@ function ancestorManifestPaths(manifestDir: string): readonly string[] {
 	let dir = manifestDir;
 	let prev = "";
 	while (dir !== prev) {
-		const manifestPath = canonicalManifest(join(dir, "Cargo.toml"));
-		if (manifestPath !== undefined && !seen.has(manifestPath)) {
+		const manifestPath = join(dir, "Cargo.toml");
+		if (!seen.has(manifestPath)) {
 			seen.add(manifestPath);
 			paths.push(manifestPath);
 		}
@@ -46,9 +54,11 @@ function ancestorManifestPaths(manifestDir: string): readonly string[] {
 
 export function readAncestorManifestSnapshots(manifestDir: string): readonly ManifestSnapshot[] | undefined {
 	const snapshots: ManifestSnapshot[] = [];
-	for (const manifestPath of ancestorManifestPaths(manifestDir)) {
-		const snapshot = readManifestSnapshot(manifestPath);
+	const manifestPaths = ancestorManifestPaths(manifestDir);
+	for (const [index, manifestPath] of manifestPaths.entries()) {
+		const snapshot = readManifestSnapshot(manifestPath, true);
 		if (snapshot === undefined) return undefined;
+		if (index === 0 && !snapshot.exists) return undefined;
 		snapshots.push(snapshot);
 	}
 	return snapshots.length === 0 ? undefined : snapshots;

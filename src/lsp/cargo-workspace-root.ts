@@ -6,12 +6,7 @@ import {
 	createSharedAbortableOperation,
 	type SharedAbortableOperation,
 } from "./abortable-shared-operation.js";
-import {
-	type ManifestSnapshot,
-	readAncestorManifestSnapshots,
-	readManifestSnapshot,
-	snapshotsAreFresh,
-} from "./cargo-manifest-snapshot.js";
+import { type ManifestSnapshot, readAncestorManifestSnapshots, snapshotsAreFresh } from "./cargo-manifest-snapshot.js";
 import { canonicalManifest, parseTrustedCargoMetadata, type TrustedCargoMetadata } from "./cargo-metadata-parser.js";
 import { type CargoMetadataLoader, defaultCargoMetadataLoader } from "./cargo-metadata-process.js";
 
@@ -85,19 +80,9 @@ function nearestCargoManifestDir(startDir: string): string | undefined {
 	return undefined;
 }
 
-function cacheEntryFor(
-	root: string,
-	rootManifestPath: string,
-	memberManifestPath: string,
-): CargoWorkspaceCacheEntry | undefined {
-	const uniqueManifestPaths = [...new Set([memberManifestPath, rootManifestPath])];
-	const snapshots: ManifestSnapshot[] = [];
-	for (const manifestPath of uniqueManifestPaths) {
-		const snapshot = readManifestSnapshot(manifestPath);
-		if (snapshot === undefined) return undefined;
-		snapshots.push(snapshot);
-	}
-	return { root, snapshots };
+function cacheEntryFor(root: string, memberManifestDir: string): CargoWorkspaceCacheEntry | undefined {
+	const snapshots = readAncestorManifestSnapshots(memberManifestDir);
+	return snapshots === undefined ? undefined : { root, snapshots };
 }
 
 function prepareCargoWorkspaceCache(
@@ -106,14 +91,15 @@ function prepareCargoWorkspaceCache(
 ): PreparedCargoWorkspaceCache | undefined {
 	const entries = new Map<string, CargoWorkspaceCacheEntry>();
 	for (const manifestPath of metadata.memberManifestPaths) {
-		const entry = cacheEntryFor(metadata.workspaceRoot, metadata.rootManifestPath, manifestPath);
+		const manifestDir = dirname(manifestPath);
+		const entry = cacheEntryFor(metadata.workspaceRoot, manifestDir);
 		if (entry === undefined) return undefined;
-		entries.set(dirname(manifestPath), entry);
+		entries.set(manifestDir, entry);
 	}
 
 	const requestedManifestPath = canonicalManifest(join(manifestDir, "Cargo.toml"));
 	if (requestedManifestPath === undefined) return undefined;
-	const requestedEntry = cacheEntryFor(metadata.workspaceRoot, metadata.rootManifestPath, requestedManifestPath);
+	const requestedEntry = cacheEntryFor(metadata.workspaceRoot, dirname(requestedManifestPath));
 	if (requestedEntry === undefined) return undefined;
 	entries.set(manifestDir, requestedEntry);
 	return { root: metadata.workspaceRoot, entries };
@@ -164,7 +150,12 @@ function sameCargoWorkspaceGeneration(left: CargoWorkspaceGeneration, right: Car
 	if (left.snapshots.length !== right.snapshots.length) return false;
 	return left.snapshots.every((snapshot, index) => {
 		const candidate = right.snapshots[index];
-		return candidate !== undefined && candidate.path === snapshot.path && candidate.content === snapshot.content;
+		return (
+			candidate !== undefined &&
+			candidate.path === snapshot.path &&
+			candidate.exists === snapshot.exists &&
+			candidate.content === snapshot.content
+		);
 	});
 }
 

@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type CargoMetadataLoader, resolveCargoWorkspaceRoot } from "../src/lsp/cargo-workspace-root.js";
 
+interface WorkspaceDeclarationCase {
+	readonly name: string;
+	readonly manifest: string;
+}
+
+const workspaceDeclarations: readonly WorkspaceDeclarationCase[] = [
+	{ name: "inline", manifest: 'workspace = { members = ["a"], resolver = "2" }\n' },
+	{ name: "dotted", manifest: 'workspace.members = ["a"]\nworkspace.resolver = "2"\n' },
+];
+
 const realpath = (path: string): string => realpathSync.native(path);
 
 function cargoMetadata(workspaceRoot: string, manifestPaths: readonly string[]): string {
@@ -207,6 +217,101 @@ describe("resolveCargoWorkspaceRoot cache", () => {
 		expect(metadataLoader).toHaveBeenCalledTimes(2);
 		expect(metadataLoader).toHaveBeenNthCalledWith(1, outerManifest, expect.any(AbortSignal));
 		expect(metadataLoader).toHaveBeenNthCalledWith(2, nestedManifest, expect.any(AbortSignal));
+	});
+
+	it.each(
+		workspaceDeclarations,
+	)("reruns metadata when a cached member gains an absent intermediate $name workspace manifest", async ({
+		manifest,
+	}) => {
+		// Given
+		const outerManifest = write("Cargo.toml", '[workspace]\nmembers = ["crates/group/a"]\nresolver = "2"\n');
+		const outerFile = write("src/lib.rs", "");
+		const memberManifest = write("crates/group/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
+		const memberFile = write("crates/group/a/src/lib.rs", "");
+		const nestedManifest = join(root, "crates/group/Cargo.toml");
+		const nestedRoot = dirname(nestedManifest);
+		const metadataLoader = vi
+			.fn<CargoMetadataLoader>()
+			.mockResolvedValueOnce(cargoMetadata(root, [memberManifest]))
+			.mockResolvedValueOnce(cargoMetadata(nestedRoot, [memberManifest]));
+
+		// When
+		await expect(resolveCargoWorkspaceRoot(outerFile, { cargoMetadataLoader: metadataLoader })).resolves.toBe(root);
+		write("crates/group/Cargo.toml", manifest);
+		const resolvedMember = await resolveCargoWorkspaceRoot(memberFile, { cargoMetadataLoader: metadataLoader });
+
+		// Then
+		expect(resolvedMember).toBe(nestedRoot);
+		expect(metadataLoader).toHaveBeenCalledTimes(2);
+		expect(metadataLoader).toHaveBeenNthCalledWith(1, outerManifest, expect.any(AbortSignal));
+		expect(metadataLoader).toHaveBeenNthCalledWith(2, memberManifest, expect.any(AbortSignal));
+	});
+
+	it.each(
+		workspaceDeclarations,
+	)("does not cache stale outer metadata when a previously absent intermediate $name workspace appears mid-flight", async ({
+		manifest,
+	}) => {
+		// Given
+		const outerManifest = write("Cargo.toml", '[workspace]\nmembers = ["crates/group/a"]\nresolver = "2"\n');
+		const outerFile = write("src/lib.rs", "");
+		const memberManifest = write("crates/group/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
+		const nestedFile = write("crates/group/src/lib.rs", "");
+		const nestedManifest = write("crates/group/Cargo.toml", "");
+		const nestedRoot = dirname(nestedManifest);
+		let resolveOuterMetadata: ((value: string) => void) | undefined;
+		const metadataLoader = vi
+			.fn<CargoMetadataLoader>()
+			.mockImplementationOnce(
+				() =>
+					new Promise<string>((resolveMetadata) => {
+						resolveOuterMetadata = resolveMetadata;
+					}),
+			)
+			.mockResolvedValueOnce(cargoMetadata(nestedRoot, [memberManifest]));
+		const outerResolution = resolveCargoWorkspaceRoot(outerFile, { cargoMetadataLoader: metadataLoader });
+
+		// When
+		write("crates/group/Cargo.toml", manifest);
+		resolveOuterMetadata?.(cargoMetadata(root, [memberManifest]));
+		const resolvedOuter = await outerResolution;
+		const resolvedNested = await resolveCargoWorkspaceRoot(nestedFile, { cargoMetadataLoader: metadataLoader });
+
+		// Then
+		expect({ resolvedOuter, resolvedNested }).toEqual({ resolvedOuter: root, resolvedNested: nestedRoot });
+		expect(metadataLoader).toHaveBeenCalledTimes(2);
+		expect(metadataLoader).toHaveBeenNthCalledWith(1, outerManifest, expect.any(AbortSignal));
+		expect(metadataLoader).toHaveBeenNthCalledWith(2, nestedManifest, expect.any(AbortSignal));
+	});
+
+	it.each(
+		workspaceDeclarations,
+	)("reruns metadata when a cached member turns an intermediate ordinary manifest into a $name workspace", async ({
+		manifest,
+	}) => {
+		// Given
+		const outerManifest = write("Cargo.toml", '[workspace]\nmembers = ["crates/group/a"]\nresolver = "2"\n');
+		const outerFile = write("src/lib.rs", "");
+		const intermediateManifest = write("crates/group/Cargo.toml", '[package]\nname = "group"\nversion = "0.1.0"\n');
+		const memberManifest = write("crates/group/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
+		const memberFile = write("crates/group/a/src/lib.rs", "");
+		const nestedRoot = dirname(intermediateManifest);
+		const metadataLoader = vi
+			.fn<CargoMetadataLoader>()
+			.mockResolvedValueOnce(cargoMetadata(root, [memberManifest]))
+			.mockResolvedValueOnce(cargoMetadata(nestedRoot, [memberManifest]));
+
+		// When
+		await expect(resolveCargoWorkspaceRoot(outerFile, { cargoMetadataLoader: metadataLoader })).resolves.toBe(root);
+		write("crates/group/Cargo.toml", manifest);
+		const resolvedMember = await resolveCargoWorkspaceRoot(memberFile, { cargoMetadataLoader: metadataLoader });
+
+		// Then
+		expect(resolvedMember).toBe(nestedRoot);
+		expect(metadataLoader).toHaveBeenCalledTimes(2);
+		expect(metadataLoader).toHaveBeenNthCalledWith(1, outerManifest, expect.any(AbortSignal));
+		expect(metadataLoader).toHaveBeenNthCalledWith(2, memberManifest, expect.any(AbortSignal));
 	});
 
 	it("bypasses a recent metadata failure when an ancestor workspace manifest changes", async () => {
