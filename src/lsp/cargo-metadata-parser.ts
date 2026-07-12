@@ -34,13 +34,63 @@ export function canonicalManifest(path: string): string | undefined {
 	}
 }
 
-function canReadFile(path: string): boolean {
+function readFile(path: string): string | undefined {
 	try {
-		readFileSync(path, "utf8");
-		return true;
+		return readFileSync(path, "utf8");
 	} catch {
-		return false;
+		return undefined;
 	}
+}
+
+type MultilineTomlQuote = '"""' | "'''";
+
+function isEscaped(value: string, index: number): boolean {
+	let backslashes = 0;
+	for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) backslashes += 1;
+	return backslashes % 2 === 1;
+}
+
+function multilineQuoteAfter(line: string, initial: MultilineTomlQuote | undefined): MultilineTomlQuote | undefined {
+	let multilineQuote = initial;
+	let singleLineQuote: '"' | "'" | undefined;
+	for (let index = 0; index < line.length; index += 1) {
+		if (multilineQuote !== undefined) {
+			if (line.startsWith(multilineQuote, index) && (multilineQuote === "'''" || !isEscaped(line, index))) {
+				index += 2;
+				multilineQuote = undefined;
+			}
+			continue;
+		}
+		if (singleLineQuote !== undefined) {
+			if (line[index] === singleLineQuote && (singleLineQuote === "'" || !isEscaped(line, index))) {
+				singleLineQuote = undefined;
+			}
+			continue;
+		}
+		if (line[index] === "#") break;
+		if (line.startsWith('"""', index) || line.startsWith("'''", index)) {
+			multilineQuote = line.startsWith('"""', index) ? '"""' : "'''";
+			index += 2;
+			continue;
+		}
+		const character = line[index];
+		if (character === '"' || character === "'") singleLineQuote = character;
+	}
+	return multilineQuote;
+}
+
+function declaresCargoWorkspace(content: string): boolean {
+	let multilineQuote: MultilineTomlQuote | undefined;
+	for (const line of content.split(/\r?\n/u)) {
+		if (
+			multilineQuote === undefined &&
+			/^\s*\[\s*(?:workspace|"workspace"|'workspace')\s*\]\s*(?:#.*)?$/u.test(line)
+		) {
+			return true;
+		}
+		multilineQuote = multilineQuoteAfter(line, multilineQuote);
+	}
+	return false;
 }
 
 function isContainedPath(root: string, path: string): boolean {
@@ -97,14 +147,20 @@ function validateCargoMetadata(
 	const requestedManifest = canonicalManifest(requestedManifestPath);
 	if (rootManifestPath === undefined || requestedManifest === undefined) return undefined;
 	if (!isContainedPath(workspaceRoot, requestedManifest)) return undefined;
-	if (!canReadFile(rootManifestPath)) return undefined;
+	const rootManifest = readFile(rootManifestPath);
+	const requestedManifestContent = readFile(requestedManifest);
+	if (rootManifest === undefined || requestedManifestContent === undefined) return undefined;
+	if (requestedManifest !== rootManifestPath && declaresCargoWorkspace(requestedManifestContent)) return undefined;
 
 	const memberManifestPaths: string[] = [];
 	const members = new Set<string>();
 	for (const manifestPath of metadata.memberManifestPaths) {
 		const canonicalPath = canonicalManifest(manifestPath);
-		if (canonicalPath === undefined || !canReadFile(canonicalPath)) return undefined;
+		if (canonicalPath === undefined) return undefined;
 		if (!isContainedPath(workspaceRoot, canonicalPath)) return undefined;
+		const content = readFile(canonicalPath);
+		if (content === undefined) return undefined;
+		if (canonicalPath !== rootManifestPath && declaresCargoWorkspace(content)) continue;
 		if (!members.has(canonicalPath)) {
 			members.add(canonicalPath);
 			memberManifestPaths.push(canonicalPath);
