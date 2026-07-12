@@ -44,9 +44,17 @@ interface CargoWorkspaceRootRequest {
 	readonly signal: AbortSignal | undefined;
 }
 
-interface CargoWorkspaceLoadRequest extends CargoWorkspaceRootRequest {
-	readonly nowMs: number;
+interface CargoWorkspaceGeneration {
 	readonly snapshots: readonly ManifestSnapshot[];
+}
+
+interface CargoWorkspaceLoadRequest extends CargoWorkspaceRootRequest {
+	readonly generation: CargoWorkspaceGeneration;
+}
+
+interface CargoWorkspaceInFlight {
+	readonly generation: CargoWorkspaceGeneration;
+	readonly operation: SharedAbortableOperation<string | undefined>;
 }
 
 interface PreparedCargoWorkspaceCache {
@@ -56,7 +64,7 @@ interface PreparedCargoWorkspaceCache {
 
 const cargoWorkspaceRootCache = new Map<string, CargoWorkspaceCacheEntry>();
 const cargoWorkspaceRootFailures = new Map<string, CargoWorkspaceFailureCacheEntry>();
-const cargoWorkspaceRootInFlight = new Map<string, SharedAbortableOperation<string | undefined>>();
+const cargoWorkspaceRootInFlight = new Map<string, CargoWorkspaceInFlight>();
 
 function realpathSafe(path: string): string {
 	try {
@@ -131,6 +139,10 @@ function cacheCargoWorkspaceFailure(manifestDir: string, nowMs: number, snapshot
 	});
 }
 
+function cacheCargoWorkspaceLoadFailure(request: CargoWorkspaceLoadRequest): void {
+	cacheCargoWorkspaceFailure(request.manifestDir, request.now(), request.generation.snapshots);
+}
+
 function cachedCargoWorkspaceFailure(manifestDir: string, nowMs: number): boolean {
 	const cached = cargoWorkspaceRootFailures.get(manifestDir);
 	if (cached === undefined) return false;
@@ -148,8 +160,16 @@ function isAbortError(error: unknown): boolean {
 	return error instanceof Error && error.name === "AbortError";
 }
 
+function sameCargoWorkspaceGeneration(left: CargoWorkspaceGeneration, right: CargoWorkspaceGeneration): boolean {
+	if (left.snapshots.length !== right.snapshots.length) return false;
+	return left.snapshots.every((snapshot, index) => {
+		const candidate = right.snapshots[index];
+		return candidate !== undefined && candidate.path === snapshot.path && candidate.content === snapshot.content;
+	});
+}
+
 function deleteInFlight(manifestDir: string, inFlight: SharedAbortableOperation<string | undefined>): void {
-	if (cargoWorkspaceRootInFlight.get(manifestDir) === inFlight) {
+	if (cargoWorkspaceRootInFlight.get(manifestDir)?.operation === inFlight) {
 		cargoWorkspaceRootInFlight.delete(manifestDir);
 	}
 }
@@ -176,20 +196,24 @@ async function loadCargoWorkspaceRoot(request: CargoWorkspaceLoadRequest): Promi
 		const manifestPath = join(request.manifestDir, "Cargo.toml");
 		const output = await request.loader(manifestPath, request.signal);
 		request.signal?.throwIfAborted();
-		if (!snapshotsAreFresh(request.snapshots)) {
-			cacheCargoWorkspaceFailure(request.manifestDir, request.nowMs, request.snapshots);
+		if (!snapshotsAreFresh(request.generation.snapshots)) {
+			cacheCargoWorkspaceLoadFailure(request);
 			return undefined;
 		}
 
 		const metadata = parseTrustedCargoMetadata(manifestPath, output);
-		if (metadata === undefined || !snapshotsAreFresh(request.snapshots)) {
-			cacheCargoWorkspaceFailure(request.manifestDir, request.nowMs, request.snapshots);
+		if (metadata === undefined || !snapshotsAreFresh(request.generation.snapshots)) {
+			cacheCargoWorkspaceLoadFailure(request);
 			return undefined;
 		}
 
 		const prepared = prepareCargoWorkspaceCache(request.manifestDir, metadata);
-		if (prepared === undefined || !snapshotsAreFresh(request.snapshots) || !preparedCacheIsFresh(prepared)) {
-			cacheCargoWorkspaceFailure(request.manifestDir, request.nowMs, request.snapshots);
+		if (
+			prepared === undefined ||
+			!snapshotsAreFresh(request.generation.snapshots) ||
+			!preparedCacheIsFresh(prepared)
+		) {
+			cacheCargoWorkspaceLoadFailure(request);
 			return undefined;
 		}
 
@@ -198,7 +222,7 @@ async function loadCargoWorkspaceRoot(request: CargoWorkspaceLoadRequest): Promi
 		return prepared.root;
 	} catch (error) {
 		if (request.signal?.aborted || isAbortError(error)) throw error;
-		cacheCargoWorkspaceFailure(request.manifestDir, request.nowMs, request.snapshots);
+		cacheCargoWorkspaceLoadFailure(request);
 		return undefined;
 	}
 }
@@ -219,14 +243,16 @@ async function cargoWorkspaceRoot(request: CargoWorkspaceRootRequest): Promise<s
 	const nowMs = request.now();
 	if (cachedCargoWorkspaceFailure(request.manifestDir, nowMs)) return undefined;
 
-	const inFlight = cargoWorkspaceRootInFlight.get(request.manifestDir);
-	if (inFlight !== undefined) return awaitSharedAbortableOperation(inFlight, request.signal);
-
 	const snapshots = readAncestorManifestSnapshots(request.manifestDir);
 	if (snapshots === undefined) return undefined;
+	const generation = { snapshots };
+	const inFlight = cargoWorkspaceRootInFlight.get(request.manifestDir);
+	if (inFlight !== undefined && sameCargoWorkspaceGeneration(inFlight.generation, generation)) {
+		return awaitSharedAbortableOperation(inFlight.operation, request.signal);
+	}
 
-	const newInFlight = createInFlightCargoWorkspaceRoot({ ...request, nowMs, snapshots });
-	cargoWorkspaceRootInFlight.set(request.manifestDir, newInFlight);
+	const newInFlight = createInFlightCargoWorkspaceRoot({ ...request, generation });
+	cargoWorkspaceRootInFlight.set(request.manifestDir, { generation, operation: newInFlight });
 	return awaitSharedAbortableOperation(newInFlight, request.signal);
 }
 
