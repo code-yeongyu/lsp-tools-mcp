@@ -1,35 +1,80 @@
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type ExecFileCallback = (error: Error | null, stdout: string, stderr: string) => void;
-
-type ExecFileOptions = {
-	readonly encoding?: BufferEncoding;
-	readonly timeout?: number;
-	readonly maxBuffer?: number;
+type SpawnOptions = {
+	readonly detached?: boolean;
 	readonly signal?: AbortSignal;
+	readonly stdio?: readonly [string, string, string];
+	readonly windowsHide?: boolean;
 };
 
-type ExecFileCall = {
+class FakeReadableStream extends EventEmitter {
+	encoding: BufferEncoding | undefined;
+
+	setEncoding(encoding: BufferEncoding): this {
+		this.encoding = encoding;
+		return this;
+	}
+}
+
+class FakeChildProcess extends EventEmitter {
+	readonly stdout = new FakeReadableStream();
+	readonly stderr = new FakeReadableStream();
+	exitCode: number | null = null;
+	signalCode: NodeJS.Signals | null = null;
+	killed = false;
+	pid: number | undefined;
+	private closed = false;
+	private failed = false;
+
+	kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
+		this.killed = true;
+		this.signalCode = signal;
+		return true;
+	}
+
+	emitStdout(chunk: string): void {
+		this.stdout.emit("data", chunk);
+	}
+
+	emitClose(code: number | null = 0, signal: NodeJS.Signals | null = null): void {
+		if (this.closed) return;
+		this.closed = true;
+		this.exitCode = code;
+		this.signalCode = signal;
+		this.emit("close", code, signal);
+	}
+
+	emitAbortError(): void {
+		if (this.closed || this.failed) return;
+		this.failed = true;
+		this.emit("error", abortError());
+	}
+}
+
+type SpawnCall = {
 	readonly command: string;
 	readonly args: readonly string[];
-	readonly options: ExecFileOptions;
-	readonly callback: ExecFileCallback;
+	readonly options: SpawnOptions;
+	readonly child: FakeChildProcess;
 };
 
 const childProcessMock = vi.hoisted(() => {
-	const calls: ExecFileCall[] = [];
-	const execFile = vi.fn((command: string, args: string[], options: ExecFileOptions, callback: ExecFileCallback) => {
-		calls.push({ command, args: [...args], options, callback });
-		return undefined;
+	const calls: SpawnCall[] = [];
+	const spawn = vi.fn((command: string, args: string[], options: SpawnOptions) => {
+		const child = new FakeChildProcess();
+		options.signal?.addEventListener("abort", () => child.emitAbortError(), { once: true });
+		calls.push({ command, args: [...args], options, child });
+		return child;
 	});
-	return { calls, execFile };
+	return { calls, spawn };
 });
 
 vi.mock("node:child_process", () => ({
-	execFile: childProcessMock.execFile,
+	spawn: childProcessMock.spawn,
 }));
 
 vi.mock("../src/lsp/server-installation.js", () => ({
@@ -78,7 +123,7 @@ describe("resolveCargoWorkspaceRoot", () => {
 	beforeEach(() => {
 		root = realpath(mkdtempSync(join(tmpdir(), "cargo-ws-root-")));
 		childProcessMock.calls.length = 0;
-		childProcessMock.execFile.mockClear();
+		childProcessMock.spawn.mockClear();
 	});
 
 	afterEach(() => {
@@ -104,7 +149,7 @@ describe("resolveCargoWorkspaceRoot", () => {
 
 		// Then
 		await expect(Promise.race([resolution, firstTurn])).resolves.toBe("event-loop");
-		expect(childProcessMock.execFile).toHaveBeenCalledTimes(1);
+		expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
 		expect(childProcessMock.calls[0]?.command).toBe("cargo");
 		expect(childProcessMock.calls[0]?.args).toEqual([
 			"metadata",
@@ -115,7 +160,8 @@ describe("resolveCargoWorkspaceRoot", () => {
 			memberManifest,
 		]);
 		expect(childProcessMock.calls[0]?.options.signal).toBeInstanceOf(AbortSignal);
-		childProcessMock.calls[0]?.callback(null, cargoMetadata(root, [memberManifest]), "");
+		childProcessMock.calls[0]?.child.emitStdout(cargoMetadata(root, [memberManifest]));
+		childProcessMock.calls[0]?.child.emitClose(0, null);
 		await expect(resolution).resolves.toBe("resolved");
 	});
 
@@ -125,13 +171,6 @@ describe("resolveCargoWorkspaceRoot", () => {
 		write("crates/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
 		const file = write("crates/a/src/lib.rs", "");
 		const controller = new AbortController();
-		childProcessMock.execFile.mockImplementationOnce(
-			(command: string, args: string[], options: ExecFileOptions, callback: ExecFileCallback) => {
-				childProcessMock.calls.push({ command, args: [...args], options, callback });
-				options.signal?.addEventListener("abort", () => callback(abortError(), "", ""), { once: true });
-				return undefined;
-			},
-		);
 
 		// When
 		const resolution = findWorkspaceRoot(file, rustServer, { signal: controller.signal }).then(
@@ -254,26 +293,25 @@ describe("resolveCargoWorkspaceRoot", () => {
 		write("crates/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
 		const file = write("crates/a/src/lib.rs", "");
 		const beforeSigterm = process.listeners("SIGTERM");
-		childProcessMock.execFile.mockImplementationOnce(
-			(command: string, args: string[], options: ExecFileOptions, callback: ExecFileCallback) => {
-				childProcessMock.calls.push({ command, args: [...args], options, callback });
-				options.signal?.addEventListener("abort", () => callback(abortError(), "", ""), { once: true });
-				return undefined;
-			},
-		);
 
 		// When
-		const resolution = resolveCargoWorkspaceRoot(file).then(
-			() => "resolved",
-			(error: unknown) => (error instanceof DOMException ? error.name : "unknown"),
-		);
-		const listener = findAddedListener("SIGTERM", beforeSigterm);
+		vi.useFakeTimers();
+		try {
+			const resolution = resolveCargoWorkspaceRoot(file).then(
+				() => "resolved",
+				(error: unknown) => (error instanceof DOMException ? error.name : "unknown"),
+			);
+			const listener = findAddedListener("SIGTERM", beforeSigterm);
 
-		// Then
-		expect(listener).toBeDefined();
-		listener?.();
-		await expect(resolution).resolves.toBe("AbortError");
-		expect(process.listeners("SIGTERM")).toEqual(beforeSigterm);
+			// Then
+			expect(listener).toBeDefined();
+			listener?.();
+			await expect(resolution).resolves.toBe("AbortError");
+			await vi.advanceTimersByTimeAsync(250);
+			expect(process.listeners("SIGTERM")).toEqual(beforeSigterm);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("aborts cargo metadata before LSP acquisition when withLspClient receives an abort", async () => {
@@ -282,16 +320,10 @@ describe("resolveCargoWorkspaceRoot", () => {
 		write("crates/a/Cargo.toml", '[package]\nname = "a"\nversion = "0.1.0"\n');
 		const file = write("crates/a/src/lib.rs", "");
 		const controller = new AbortController();
-		childProcessMock.execFile.mockImplementationOnce(
-			(command: string, args: string[], options: ExecFileOptions, callback: ExecFileCallback) => {
-				childProcessMock.calls.push({ command, args: [...args], options, callback });
-				options.signal?.addEventListener("abort", () => callback(abortError(), "", ""), { once: true });
-				return undefined;
-			},
-		);
+		const acquireClient = vi.fn(async () => "unused");
 
 		// When
-		const resolution = withLspClient(file, async () => "unused", "definition", {
+		const resolution = withLspClient(file, acquireClient, "definition", {
 			signal: controller.signal,
 		}).then(
 			() => "resolved",
@@ -301,5 +333,6 @@ describe("resolveCargoWorkspaceRoot", () => {
 
 		// Then
 		await expect(Promise.race([resolution, eventLoopTurn()])).resolves.toBe("AbortError");
+		expect(acquireClient).not.toHaveBeenCalled();
 	});
 });

@@ -136,6 +136,37 @@ beforeEach(() => {
 	wrapperPidFile = join(fixtureDirectory, "wrapper.pid");
 	descendantPidFile = join(fixtureDirectory, "descendant.pid");
 	preloadPath = join(fixtureDirectory, "fake-cargo-preload.cjs");
+	const descendantWorkerPath = join(fixtureDirectory, "fake-cargo-descendant.cjs");
+	const descendantLauncherPath = join(fixtureDirectory, "fake-cargo-launcher.cjs");
+	writeFileSync(
+		descendantWorkerPath,
+		[
+			"for (const signal of ['SIGTERM', 'SIGHUP', 'SIGINT']) {",
+			"  try {",
+			"    process.on(signal, () => {})",
+			"  } catch {}",
+			"}",
+			"setInterval(() => {}, 1000)",
+		].join("\n"),
+	);
+	writeFileSync(
+		descendantLauncherPath,
+		[
+			'const { spawn } = require("node:child_process")',
+			'const { writeFileSync } = require("node:fs")',
+			"const [nodeExecutable, descendantScriptPath, descendantPidFile] = process.argv.slice(2)",
+			"if (nodeExecutable === undefined || descendantScriptPath === undefined || descendantPidFile === undefined) process.exit(2)",
+			"const descendantEnv = { ...process.env }",
+			'delete descendantEnv["NODE_OPTIONS"]',
+			"const descendant = spawn(nodeExecutable, [descendantScriptPath], {",
+			"  env: descendantEnv,",
+			"  stdio: 'ignore',",
+			"  windowsHide: true,",
+			"})",
+			"if (descendant.pid === undefined) process.exit(3)",
+			"writeFileSync(descendantPidFile, String(descendant.pid))",
+		].join("\n"),
+	);
 	writeFileSync(
 		preloadPath,
 		[
@@ -146,16 +177,15 @@ beforeEach(() => {
 			`const wrapperPidFile = ${JSON.stringify(wrapperPidFile)}`,
 			`const descendantPidFile = ${JSON.stringify(descendantPidFile)}`,
 			`const nodeExecutable = ${JSON.stringify(process.execPath)}`,
-			"const descendantEnv = { ...process.env }",
-			'delete descendantEnv["NODE_OPTIONS"]',
-			"const descendant = spawn(nodeExecutable, ['-e', 'setInterval(() => {}, 1000)'], {",
-			"  env: descendantEnv,",
+			`const descendantWorkerPath = ${JSON.stringify(descendantWorkerPath)}`,
+			`const descendantLauncherPath = ${JSON.stringify(descendantLauncherPath)}`,
+			"const helper = spawn(nodeExecutable, [descendantLauncherPath, nodeExecutable, descendantWorkerPath, descendantPidFile], {",
+			"  env: process.env,",
 			"  stdio: 'ignore',",
 			"  windowsHide: true,",
 			"})",
-			"if (descendant.pid === undefined) process.exit(3)",
+			"helper.unref()",
 			"writeFileSync(wrapperPidFile, String(process.pid))",
-			"writeFileSync(descendantPidFile, String(descendant.pid))",
 			"Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0)",
 		].join("\n"),
 	);
@@ -220,7 +250,9 @@ describe("defaultCargoMetadataLoader process lifecycle", () => {
 			// Then
 			await expect(loading).rejects.toMatchObject({ name: "AbortError" });
 			await expectProcessTreeGone(pids);
-			expect(process.listeners(signal)).toEqual(beforeListeners);
+			await expect
+				.poll(() => process.listeners(signal), { timeout: PROCESS_EXIT_TIMEOUT_MS, interval: 25 })
+				.toEqual(beforeListeners);
 		}, 10_000);
 	}
 
