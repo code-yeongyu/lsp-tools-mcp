@@ -240,7 +240,13 @@ export async function executeLspDiagnostics(
 				return text(message, details);
 			}
 
-			const output = await aggregateDiagnosticsForDirectory(absPath, extension, severity);
+			const output = await aggregateDiagnosticsForDirectory(
+				absPath,
+				extension,
+				severity,
+				undefined,
+				clientOptions(signal),
+			);
 			const details: LspDiagnosticsDetails = {
 				filePath,
 				severity,

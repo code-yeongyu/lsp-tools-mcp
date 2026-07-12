@@ -15,10 +15,60 @@ interface FileDiagnostic {
 	diagnostic: Diagnostic;
 }
 
-export function collectFilesWithExtension(dir: string, extension: string, maxFiles: number): string[] {
+interface DirectoryDiagnosticsOptions {
+	readonly signal?: AbortSignal;
+}
+
+function isAbortError(error: unknown): boolean {
+	if (error instanceof DOMException && error.name === "AbortError") return true;
+	return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+	if (!signal?.aborted) return;
+	if (signal.reason instanceof Error) throw signal.reason;
+	throw new DOMException("Aborted", "AbortError");
+}
+
+function awaitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	if (signal === undefined) return promise;
+	throwIfAborted(signal);
+	return new Promise<T>((resolvePromise, rejectPromise) => {
+		let settled = false;
+		const onAbort = () => {
+			if (settled) return;
+			settled = true;
+			rejectPromise(signal.reason instanceof Error ? signal.reason : new DOMException("Aborted", "AbortError"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+		promise.then(
+			(value) => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener("abort", onAbort);
+				resolvePromise(value);
+			},
+			(error: unknown) => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener("abort", onAbort);
+				rejectPromise(error);
+			},
+		);
+	});
+}
+
+export function collectFilesWithExtension(
+	dir: string,
+	extension: string,
+	maxFiles: number,
+	options: DirectoryDiagnosticsOptions = {},
+): string[] {
 	const files: string[] = [];
+	const { signal } = options;
 
 	function walk(currentDir: string): void {
+		throwIfAborted(signal);
 		if (files.length >= maxFiles) return;
 
 		let entries: string[] = [];
@@ -29,6 +79,7 @@ export function collectFilesWithExtension(dir: string, extension: string, maxFil
 		}
 
 		for (const entry of entries) {
+			throwIfAborted(signal);
 			if (files.length >= maxFiles) return;
 
 			const fullPath = join(currentDir, entry);
@@ -49,10 +100,12 @@ export function collectFilesWithExtension(dir: string, extension: string, maxFil
 			} else if (stat.isFile() && extname(fullPath) === extension) {
 				files.push(fullPath);
 			}
+			throwIfAborted(signal);
 		}
 	}
 
 	walk(dir);
+	throwIfAborted(signal);
 	return files;
 }
 
@@ -61,7 +114,11 @@ export async function aggregateDiagnosticsForDirectory(
 	extension: string,
 	severity?: SeverityFilter,
 	maxFiles: number = DEFAULT_MAX_DIRECTORY_FILES,
+	options: DirectoryDiagnosticsOptions = {},
 ): Promise<string> {
+	const { signal } = options;
+	throwIfAborted(signal);
+	const signalOptions: DirectoryDiagnosticsOptions = signal === undefined ? {} : { signal };
 	if (!extension.startsWith(".")) {
 		throw new LspInvalidPathError(
 			`Extension must start with a dot (e.g., ".ts", not "${extension}"). Use ".${extension}" instead.`,
@@ -79,9 +136,10 @@ export async function aggregateDiagnosticsForDirectory(
 	}
 
 	const server = serverResult.server;
-	const allFiles = collectFilesWithExtension(absDir, extension, maxFiles + 1);
+	const allFiles = collectFilesWithExtension(absDir, extension, maxFiles + 1, signalOptions);
 	const wasCapped = allFiles.length > maxFiles;
 	const filesToProcess = allFiles.slice(0, maxFiles);
+	throwIfAborted(signal);
 
 	if (filesToProcess.length === 0) {
 		return [
@@ -92,16 +150,19 @@ export async function aggregateDiagnosticsForDirectory(
 		].join("\n");
 	}
 
-	const root = await findWorkspaceRoot(absDir, server);
+	const root = await awaitWithAbort(findWorkspaceRoot(absDir, server, signalOptions), signal);
+	throwIfAborted(signal);
 	const manager = getLspManager();
 	const allDiagnostics: FileDiagnostic[] = [];
 	const fileErrors: { file: string; error: string }[] = [];
 
-	const client = await manager.getClient(root, server);
+	const client = await awaitWithAbort(manager.getClient(root, server, signal), signal);
 	try {
 		for (const file of filesToProcess) {
+			throwIfAborted(signal);
 			try {
-				const result = await client.diagnostics(file);
+				const result = await awaitWithAbort(client.diagnostics(file), signal);
+				throwIfAborted(signal);
 				const filtered = filterDiagnosticsBySeverity(result.items, severity);
 				allDiagnostics.push(
 					...filtered.map((diagnostic) => ({
@@ -110,6 +171,7 @@ export async function aggregateDiagnosticsForDirectory(
 					})),
 				);
 			} catch (e) {
+				if (signal?.aborted || isAbortError(e)) throw e;
 				fileErrors.push({
 					file,
 					error: e instanceof Error ? e.message : String(e),
