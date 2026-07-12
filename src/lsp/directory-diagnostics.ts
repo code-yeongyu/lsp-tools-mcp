@@ -92,7 +92,7 @@ export async function aggregateDiagnosticsForDirectory(
 		].join("\n");
 	}
 
-	const root = findWorkspaceRoot(absDir, server);
+	const root = await findWorkspaceRoot(absDir, server);
 	const manager = getLspManager();
 	const allDiagnostics: FileDiagnostic[] = [];
 	const fileErrors: { file: string; error: string }[] = [];
