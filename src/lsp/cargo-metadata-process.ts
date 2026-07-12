@@ -1,4 +1,6 @@
-import { execFile } from "node:child_process";
+import { type ChildProcess, execFile } from "node:child_process";
+
+import { terminateProcessTree } from "./process.js";
 
 const CARGO_METADATA_MAX_BUFFER = 64 * 1024 * 1024;
 const CARGO_METADATA_TIMEOUT_MS = 10_000;
@@ -60,7 +62,13 @@ export async function defaultCargoMetadataLoader(manifestPath: string, signal?: 
 	try {
 		controller.signal.throwIfAborted();
 		return await new Promise<string>((resolveLoader, rejectLoader) => {
-			execFile(
+			let cargoProcess: ChildProcess | undefined;
+			const terminateCargoProcessTree = () => {
+				if (cargoProcess !== undefined) terminateProcessTree(cargoProcess);
+			};
+			const timeout = setTimeout(terminateCargoProcessTree, CARGO_METADATA_TIMEOUT_MS);
+			controller.signal.addEventListener("abort", terminateCargoProcessTree, { once: true });
+			cargoProcess = execFile(
 				"cargo",
 				["metadata", "--no-deps", "--format-version", "1", "--manifest-path", manifestPath],
 				{
@@ -70,7 +78,10 @@ export async function defaultCargoMetadataLoader(manifestPath: string, signal?: 
 					signal: controller.signal,
 				},
 				(error, stdout) => {
+					clearTimeout(timeout);
+					controller.signal.removeEventListener("abort", terminateCargoProcessTree);
 					if (error) {
+						terminateCargoProcessTree();
 						rejectLoader(error);
 						return;
 					}

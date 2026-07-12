@@ -1,4 +1,5 @@
-import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
@@ -25,6 +26,15 @@ export interface PreparedSpawnCommand {
 	command: string;
 	args: string[];
 	shell: false;
+}
+
+export interface ProcessTreeTerminationOptions {
+	readonly platform?: NodeJS.Platform;
+	readonly spawnSync?: (
+		command: string,
+		args: string[],
+		options: { readonly stdio: "ignore" },
+	) => { readonly error?: Error; readonly status: number | null };
 }
 
 function isMissingProcessError(error: unknown): boolean {
@@ -81,25 +91,49 @@ function wrap(proc: ChildProcess): SpawnedProcess {
 		},
 		exited: exitedPromise,
 		kill(signal?: NodeJS.Signals) {
-			killProcessTree(proc, signal ?? "SIGTERM");
+			terminateProcessTree(proc, signal ?? "SIGTERM");
 		},
 	};
 }
 
-function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals): void {
-	if (process.platform === "win32" && proc.pid) {
-		const result = spawnSync("taskkill", ["/pid", String(proc.pid), "/f", "/t"], { stdio: "ignore" });
+export function terminateProcessTree(
+	proc: ChildProcess,
+	signal: NodeJS.Signals = "SIGTERM",
+	options: ProcessTreeTerminationOptions = {},
+): void {
+	const platform = options.platform ?? process.platform;
+	if (platform === "win32" && proc.pid) {
+		const args = ["/pid", String(proc.pid), "/f", "/t"];
+		const result =
+			options.spawnSync === undefined
+				? childProcess.spawnSync("taskkill", args, { stdio: "ignore" })
+				: options.spawnSync("taskkill", args, { stdio: "ignore" });
 		if (!result.error && result.status === 0) return;
 		if (result.error) reportKillError("windows process tree kill", result.error);
 	}
 
-	if (process.platform !== "win32" && proc.pid) {
+	if (platform !== "win32" && proc.pid) {
 		try {
 			process.kill(-proc.pid, signal);
 			return;
 		} catch (error) {
 			reportKillError("process group kill", error);
 		}
+
+		const descendants = findDescendantProcessIds(proc.pid);
+		try {
+			proc.kill(signal);
+		} catch (error) {
+			reportKillError("process kill", error);
+		}
+		for (const pid of descendants) {
+			try {
+				process.kill(pid, signal);
+			} catch (error) {
+				reportKillError("descendant process kill", error);
+			}
+		}
+		return;
 	}
 
 	try {
@@ -107,6 +141,39 @@ function killProcessTree(proc: ChildProcess, signal: NodeJS.Signals): void {
 	} catch (error) {
 		reportKillError("process kill", error);
 	}
+}
+
+function findDescendantProcessIds(rootPid: number): number[] {
+	const result = childProcess.spawnSync("ps", ["-A", "-o", "pid=,ppid="], { encoding: "utf8" });
+	if (result.error) {
+		reportKillError("process tree inspection", result.error);
+		return [];
+	}
+	if (result.status !== 0 || typeof result.stdout !== "string") return [];
+
+	const childrenByParent = new Map<number, number[]>();
+	for (const line of result.stdout.split("\n")) {
+		const [pidText, parentPidText] = line.trim().split(/\s+/, 2);
+		if (pidText === undefined || parentPidText === undefined) continue;
+		const pid = Number(pidText);
+		const parentPid = Number(parentPidText);
+		if (!Number.isSafeInteger(pid) || !Number.isSafeInteger(parentPid)) continue;
+		const children = childrenByParent.get(parentPid) ?? [];
+		children.push(pid);
+		childrenByParent.set(parentPid, children);
+	}
+
+	const descendants: number[] = [];
+	const pendingParents = [rootPid];
+	while (pendingParents.length > 0) {
+		const parentPid = pendingParents.pop();
+		if (parentPid === undefined) break;
+		for (const childPid of childrenByParent.get(parentPid) ?? []) {
+			descendants.push(childPid);
+			pendingParents.push(childPid);
+		}
+	}
+	return descendants.reverse();
 }
 
 function isWindowsShellShim(command: string): boolean {
@@ -189,7 +256,7 @@ export function spawnProcess(command: string[], options: SpawnOptions): SpawnedP
 		process.env["ComSpec"] ?? "cmd.exe",
 		options.env,
 	);
-	const proc = spawn(preparedCommand.command, preparedCommand.args, {
+	const proc = childProcess.spawn(preparedCommand.command, preparedCommand.args, {
 		cwd: options.cwd,
 		env: options.env,
 		stdio: ["pipe", "pipe", "pipe"],

@@ -1,10 +1,10 @@
+import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { afterEach, describe, expect, it } from "vitest";
-
-import { createSpawnCommand, spawnProcess } from "../src/lsp/process.js";
+import { createSpawnCommand, spawnProcess, terminateProcessTree } from "../src/lsp/process.js";
 
 const tempDirectories: string[] = [];
 
@@ -148,4 +148,30 @@ describe("spawnProcess", () => {
 			}
 		},
 	);
+});
+
+describe("terminateProcessTree", () => {
+	it("#given windows child process #when terminating its tree #then taskkill forcefully includes descendants", () => {
+		// given
+		const proc = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+			stdio: "ignore",
+		});
+		const spawnSync = vi.fn(() => ({ status: 0 }));
+
+		try {
+			const pid = proc.pid;
+			expect(pid).toBeTypeOf("number");
+			if (pid === undefined) return;
+
+			// when
+			terminateProcessTree(proc, "SIGTERM", { platform: "win32", spawnSync });
+
+			// then
+			expect(spawnSync).toHaveBeenCalledWith("taskkill", ["/pid", String(pid), "/f", "/t"], {
+				stdio: "ignore",
+			});
+		} finally {
+			proc.kill("SIGKILL");
+		}
+	});
 });
