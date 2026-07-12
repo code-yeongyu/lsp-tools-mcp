@@ -41,10 +41,6 @@ function readFirstLine(stream: NodeJS.ReadableStream): Promise<string> {
 	});
 }
 
-function sleep(ms: number): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function isPidAlive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -136,12 +132,11 @@ describe("spawnProcess", () => {
 			try {
 				// when
 				proc.kill("SIGTERM");
-				await Promise.race([proc.exited, sleep(2_000)]);
-				await sleep(200);
 
 				// then
 				expect(Number.isInteger(childPid)).toBe(true);
-				expect(isPidAlive(childPid)).toBe(false);
+				await expect.poll(() => proc.exitCode, { timeout: 2_000, interval: 25 }).not.toBeNull();
+				await expect.poll(() => isPidAlive(childPid), { timeout: 2_000, interval: 25 }).toBe(false);
 			} finally {
 				killPidBestEffort(childPid);
 				proc.kill("SIGKILL");
