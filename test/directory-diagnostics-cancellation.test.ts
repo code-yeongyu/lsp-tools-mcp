@@ -1,4 +1,13 @@
-import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -177,7 +186,7 @@ describe("executeLspDiagnostics directory cancellation", () => {
 
 		const cargoExecutable = join(binaryDirectory, process.platform === "win32" ? "cargo.exe" : "cargo");
 		if (process.platform === "win32") {
-			linkSync(process.execPath, cargoExecutable);
+			copyFileSync(process.execPath, cargoExecutable);
 		} else {
 			writeFileSync(cargoExecutable, `#!/usr/bin/env node\nrequire("./fake-cargo.cjs")\n`);
 			chmodSync(cargoExecutable, 0o755);
@@ -242,7 +251,7 @@ describe("executeLspDiagnostics directory cancellation", () => {
 		for (const pid of activePids) killPidBestEffort(pid);
 		activePids.clear();
 		restoreEnvironment();
-		rmSync(fixtureDirectory, { recursive: true, force: true });
+		rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 	});
 
 	it("#given a Rust directory with live Cargo metadata #when the request aborts #then diagnostics reject promptly and clean up before LSP acquisition", async () => {

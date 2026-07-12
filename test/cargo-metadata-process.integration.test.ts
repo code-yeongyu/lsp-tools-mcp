@@ -1,7 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import {
+	copyFileSync,
 	existsSync,
-	linkSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -160,14 +160,14 @@ beforeEach(() => {
 		].join("\n"),
 	);
 	const cargoExecutable = join(binaryDirectory, process.platform === "win32" ? "cargo.exe" : "cargo");
-	if (process.platform === "win32") linkSync(process.execPath, cargoExecutable);
+	if (process.platform === "win32") copyFileSync(process.execPath, cargoExecutable);
 	else symlinkSync(process.execPath, cargoExecutable);
 });
 
 afterEach(() => {
 	for (const pid of activePids) killPidBestEffort(pid);
 	activePids.clear();
-	rmSync(fixtureDirectory, { recursive: true, force: true });
+	rmSync(fixtureDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
 });
 
 describe("defaultCargoMetadataLoader process lifecycle", () => {
