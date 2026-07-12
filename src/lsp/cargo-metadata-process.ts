@@ -70,7 +70,7 @@ export async function defaultCargoMetadataLoader(manifestPath: string, signal?: 
 					controller.signal.removeEventListener("abort", terminateCargoProcessTree);
 					if (error) {
 						terminateCargoProcessTree();
-						rejectLoader(error);
+						rejectLoader(controller.signal.aborted ? controller.signal.reason : error);
 						return;
 					}
 					resolveLoader(stdout);

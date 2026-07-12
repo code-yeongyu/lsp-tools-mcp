@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 
@@ -29,6 +29,7 @@ let rustProjectDirectory = "";
 let wrapperPidFile = "";
 let descendantPidFile = "";
 let previousPath: string | undefined;
+let previousNodeOptions: string | undefined;
 let previousProjectConfig: string | undefined;
 let previousUserConfig: string | undefined;
 const activePids = new Set<number>();
@@ -153,6 +154,8 @@ async function waitForCargoStart(diagnostics: Promise<unknown>): Promise<Process
 function restoreEnvironment(): void {
 	if (previousPath === undefined) delete process.env["PATH"];
 	else process.env["PATH"] = previousPath;
+	if (previousNodeOptions === undefined) delete process.env["NODE_OPTIONS"];
+	else process.env["NODE_OPTIONS"] = previousNodeOptions;
 	if (previousProjectConfig === undefined) delete process.env["LSP_TOOLS_MCP_PROJECT_CONFIG"];
 	else process.env["LSP_TOOLS_MCP_PROJECT_CONFIG"] = previousProjectConfig;
 	if (previousUserConfig === undefined) delete process.env["LSP_TOOLS_MCP_USER_CONFIG"];
@@ -172,9 +175,9 @@ describe("executeLspDiagnostics directory cancellation", () => {
 		wrapperPidFile = join(fixtureDirectory, "wrapper.pid");
 		descendantPidFile = join(fixtureDirectory, "descendant.pid");
 
-		const cargoExecutable = join(binaryDirectory, process.platform === "win32" ? "cargo.cmd" : "cargo");
+		const cargoExecutable = join(binaryDirectory, process.platform === "win32" ? "cargo.exe" : "cargo");
 		if (process.platform === "win32") {
-			writeFileSync(cargoExecutable, ["@echo off", `"${process.execPath}" "%~dp0fake-cargo.cjs" %*`].join("\r\n"));
+			linkSync(process.execPath, cargoExecutable);
 		} else {
 			writeFileSync(cargoExecutable, `#!/usr/bin/env node\nrequire("./fake-cargo.cjs")\n`);
 			chmodSync(cargoExecutable, 0o755);
@@ -214,10 +217,19 @@ describe("executeLspDiagnostics directory cancellation", () => {
 		);
 
 		previousPath = process.env["PATH"];
+		previousNodeOptions = process.env["NODE_OPTIONS"];
 		previousProjectConfig = process.env["LSP_TOOLS_MCP_PROJECT_CONFIG"];
 		previousUserConfig = process.env["LSP_TOOLS_MCP_USER_CONFIG"];
 		process.env["PATH"] =
 			previousPath === undefined ? binaryDirectory : `${binaryDirectory}${delimiter}${previousPath}`;
+		if (process.platform === "win32") {
+			process.env["NODE_OPTIONS"] = [
+				previousNodeOptions,
+				`--require=${JSON.stringify(join(binaryDirectory, "fake-cargo.cjs"))}`,
+			]
+				.filter((value) => value !== undefined && value.length > 0)
+				.join(" ");
+		}
 		process.env["LSP_TOOLS_MCP_PROJECT_CONFIG"] = projectConfigPath;
 		process.env["LSP_TOOLS_MCP_USER_CONFIG"] = join(fixtureDirectory, "missing-user-config.json");
 		process.env["FAKE_CARGO_WRAPPER_PID_FILE"] = wrapperPidFile;
