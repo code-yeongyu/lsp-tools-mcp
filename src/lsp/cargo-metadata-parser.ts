@@ -1,5 +1,6 @@
 import { readFileSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { parse } from "smol-toml";
 
 interface ParsedCargoMetadata {
 	readonly workspaceRoot: string;
@@ -42,55 +43,16 @@ function readFile(path: string): string | undefined {
 	}
 }
 
-type MultilineTomlQuote = '"""' | "'''";
+type CargoManifestKind = "invalid" | "ordinary" | "workspace";
 
-function isEscaped(value: string, index: number): boolean {
-	let backslashes = 0;
-	for (let cursor = index - 1; cursor >= 0 && value[cursor] === "\\"; cursor -= 1) backslashes += 1;
-	return backslashes % 2 === 1;
-}
-
-function multilineQuoteAfter(line: string, initial: MultilineTomlQuote | undefined): MultilineTomlQuote | undefined {
-	let multilineQuote = initial;
-	let singleLineQuote: '"' | "'" | undefined;
-	for (let index = 0; index < line.length; index += 1) {
-		if (multilineQuote !== undefined) {
-			if (line.startsWith(multilineQuote, index) && (multilineQuote === "'''" || !isEscaped(line, index))) {
-				index += 2;
-				multilineQuote = undefined;
-			}
-			continue;
-		}
-		if (singleLineQuote !== undefined) {
-			if (line[index] === singleLineQuote && (singleLineQuote === "'" || !isEscaped(line, index))) {
-				singleLineQuote = undefined;
-			}
-			continue;
-		}
-		if (line[index] === "#") break;
-		if (line.startsWith('"""', index) || line.startsWith("'''", index)) {
-			multilineQuote = line.startsWith('"""', index) ? '"""' : "'''";
-			index += 2;
-			continue;
-		}
-		const character = line[index];
-		if (character === '"' || character === "'") singleLineQuote = character;
+function readCargoManifestKind(path: string): CargoManifestKind | undefined {
+	const content = readFile(path);
+	if (content === undefined) return undefined;
+	try {
+		return Object.hasOwn(parse(content), "workspace") ? "workspace" : "ordinary";
+	} catch {
+		return "invalid";
 	}
-	return multilineQuote;
-}
-
-function declaresCargoWorkspace(content: string): boolean {
-	let multilineQuote: MultilineTomlQuote | undefined;
-	for (const line of content.split(/\r?\n/u)) {
-		if (
-			multilineQuote === undefined &&
-			/^\s*\[\s*(?:workspace|"workspace"|'workspace')\s*\]\s*(?:#.*)?$/u.test(line)
-		) {
-			return true;
-		}
-		multilineQuote = multilineQuoteAfter(line, multilineQuote);
-	}
-	return false;
 }
 
 function isContainedPath(root: string, path: string): boolean {
@@ -147,10 +109,12 @@ function validateCargoMetadata(
 	const requestedManifest = canonicalManifest(requestedManifestPath);
 	if (rootManifestPath === undefined || requestedManifest === undefined) return undefined;
 	if (!isContainedPath(workspaceRoot, requestedManifest)) return undefined;
-	const rootManifest = readFile(rootManifestPath);
-	const requestedManifestContent = readFile(requestedManifest);
-	if (rootManifest === undefined || requestedManifestContent === undefined) return undefined;
-	if (requestedManifest !== rootManifestPath && declaresCargoWorkspace(requestedManifestContent)) return undefined;
+	const rootManifestKind = readCargoManifestKind(rootManifestPath);
+	const requestedManifestKind =
+		requestedManifest === rootManifestPath ? rootManifestKind : readCargoManifestKind(requestedManifest);
+	if (rootManifestKind === undefined || rootManifestKind === "invalid") return undefined;
+	if (requestedManifestKind === undefined || requestedManifestKind === "invalid") return undefined;
+	if (requestedManifest !== rootManifestPath && requestedManifestKind === "workspace") return undefined;
 
 	const memberManifestPaths: string[] = [];
 	const members = new Set<string>();
@@ -158,9 +122,9 @@ function validateCargoMetadata(
 		const canonicalPath = canonicalManifest(manifestPath);
 		if (canonicalPath === undefined) return undefined;
 		if (!isContainedPath(workspaceRoot, canonicalPath)) return undefined;
-		const content = readFile(canonicalPath);
-		if (content === undefined) return undefined;
-		if (canonicalPath !== rootManifestPath && declaresCargoWorkspace(content)) continue;
+		const manifestKind = canonicalPath === rootManifestPath ? rootManifestKind : readCargoManifestKind(canonicalPath);
+		if (manifestKind === undefined) return undefined;
+		if (canonicalPath !== rootManifestPath && manifestKind !== "ordinary") continue;
 		if (!members.has(canonicalPath)) {
 			members.add(canonicalPath);
 			memberManifestPaths.push(canonicalPath);

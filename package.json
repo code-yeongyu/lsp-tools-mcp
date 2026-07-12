@@ -48,5 +48,11 @@
 	},
 	"engines": {
 		"node": ">=20.0.0"
-	}
+	},
+	"optionalDependencies": {
+		"smol-toml": "^1.7.0"
+	},
+	"bundleDependencies": [
+		"smol-toml"
+	]
 }
