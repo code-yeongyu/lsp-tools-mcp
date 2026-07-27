@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { LspProcessExitedError } from "../src/lsp/errors.js";
-import { formatKnownLspStartupFailure, handleMissingDependencyError } from "../src/lsp/utils.js";
+import {
+	formatKnownLspStartupFailure,
+	handleMissingDependencyError,
+	normalizeDiagnosticUri,
+} from "../src/lsp/utils.js";
 
 describe("formatKnownLspStartupFailure", () => {
 	it("#given rust-src component conflict #when formatting startup failure #then returns repair guidance", () => {
@@ -68,5 +72,52 @@ describe("handleMissingDependencyError", () => {
 		// when / then
 		expect(handleMissingDependencyError(notInstalled)).toBe(notInstalled.message);
 		expect(handleMissingDependencyError(notConfigured)).toBe(notConfigured.message);
+	});
+});
+
+describe("normalizeDiagnosticUri", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	function stubPlatform(value: NodeJS.Platform): void {
+		vi.stubGlobal("process", { ...process, platform: value });
+	}
+
+	it("#given windows didOpen and publishDiagnostics uris for the same file #when normalizing #then both match", () => {
+		// given
+		stubPlatform("win32");
+		const didOpen = "file:///C:/workspace/proj/src/Index.ts";
+		const published = "file:///c%3A/workspace/proj/src/Index.ts";
+
+		// when
+		const normalizedOpen = normalizeDiagnosticUri(didOpen);
+		const normalizedPublished = normalizeDiagnosticUri(published);
+
+		// then
+		expect(normalizedOpen).toBe(normalizedPublished);
+	});
+
+	it("#given a windows uri #when normalizing #then only the drive letter is lowered and path case is preserved", () => {
+		// given
+		stubPlatform("win32");
+
+		// when
+		const normalized = normalizeDiagnosticUri("file:///C:/Workspace/Proj/MyComponent.ts");
+
+		// then
+		expect(normalized).toBe("file:///c:/Workspace/Proj/MyComponent.ts");
+	});
+
+	it("#given posix uris #when normalizing #then they are returned unchanged", () => {
+		// given
+		stubPlatform("linux");
+		const upper = "file:///home/user/Foo.ts";
+		const lower = "file:///home/user/foo.ts";
+
+		// when / then
+		expect(normalizeDiagnosticUri(upper)).toBe(upper);
+		expect(normalizeDiagnosticUri(lower)).toBe(lower);
+		expect(normalizeDiagnosticUri(upper)).not.toBe(normalizeDiagnosticUri(lower));
 	});
 });

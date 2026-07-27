@@ -7,6 +7,7 @@ import { JsonRpcConnection } from "./json-rpc-connection.js";
 import { type SpawnedProcess, spawnProcess } from "./process.js";
 import { getAdditionalPathBases } from "./server-installation.js";
 import type { Diagnostic, ResolvedServer } from "./types.js";
+import { normalizeDiagnosticUri } from "./utils.js";
 
 interface ConfigurationItem {
 	section?: string;
@@ -88,7 +89,7 @@ export class LspClientTransport {
 		this.connection.onNotification("textDocument/publishDiagnostics", (params) => {
 			const diagnosticsParams = parseDiagnosticsParams(params);
 			if (diagnosticsParams?.uri) {
-				this.diagnosticsStore.set(diagnosticsParams.uri, diagnosticsParams.diagnostics);
+				this.diagnosticsStore.set(normalizeDiagnosticUri(diagnosticsParams.uri), diagnosticsParams.diagnostics);
 			}
 		});
 
@@ -268,7 +269,7 @@ export class LspClientTransport {
 	}
 
 	getStoredDiagnostics(uri: string): Diagnostic[] {
-		return this.diagnosticsStore.get(uri) ?? [];
+		return this.diagnosticsStore.get(normalizeDiagnosticUri(uri)) ?? [];
 	}
 }
 
