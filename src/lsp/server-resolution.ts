@@ -1,12 +1,23 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+
 import { getDisabledServerIds, getMergedServers } from "./config-loader.js";
 import { BUILTIN_SERVERS, LSP_INSTALL_HINTS } from "./server-definitions.js";
 import { isServerInstalled } from "./server-installation.js";
 import type { ServerLookupResult } from "./types.js";
 
-export function findServerForExtension(ext: string): ServerLookupResult {
-	const servers = getMergedServers();
+export interface ServerResolutionOptions {
+	filePath?: string;
+}
 
-	for (const server of servers) {
+const BIOME_CONFIG_FILES = ["biome.json", "biome.jsonc"] as const;
+const BIOME_PACKAGE_NAME = "@biomejs/biome";
+
+export function findServerForExtension(ext: string, options: ServerResolutionOptions = {}): ServerLookupResult {
+	const servers = getMergedServers();
+	const activeServers = servers.filter((server) => isServerActiveForPath(server, options.filePath));
+
+	for (const server of activeServers) {
 		if (server.extensions.includes(ext) && isServerInstalled(server.command)) {
 			const resolvedServer = {
 				id: server.id,
@@ -34,7 +45,7 @@ export function findServerForExtension(ext: string): ServerLookupResult {
 		}
 	}
 
-	for (const server of servers) {
+	for (const server of activeServers) {
 		if (server.extensions.includes(ext)) {
 			const installHint =
 				LSP_INSTALL_HINTS[server.id] ?? `Install '${server.command[0]}' and ensure it's in your PATH`;
@@ -50,12 +61,66 @@ export function findServerForExtension(ext: string): ServerLookupResult {
 		}
 	}
 
-	const availableServers = [...new Set(servers.map((s) => s.id))];
+	const availableServers = [...new Set(activeServers.map((s) => s.id))];
 	return {
 		status: "not_configured",
 		extension: ext,
 		availableServers,
 	};
+}
+
+function isServerActiveForPath(server: { id: string; source: string }, filePath: string | undefined): boolean {
+	if (server.source !== "builtin") return true;
+	if (server.id !== "biome") return true;
+	if (filePath === undefined) return true;
+	return hasBiomeProjectOptIn(filePath);
+}
+
+function hasBiomeProjectOptIn(filePath: string): boolean {
+	let dir = getStartDirectory(filePath);
+	let previous = "";
+
+	while (dir !== previous) {
+		if (BIOME_CONFIG_FILES.some((fileName) => existsSync(join(dir, fileName)))) {
+			return true;
+		}
+		if (packageJsonHasBiomeDependency(join(dir, "package.json"))) {
+			return true;
+		}
+
+		previous = dir;
+		dir = dirname(dir);
+	}
+
+	return false;
+}
+
+function getStartDirectory(filePath: string): string {
+	const resolved = resolve(filePath);
+	try {
+		return statSync(resolved).isDirectory() ? resolved : dirname(resolved);
+	} catch {
+		return dirname(resolved);
+	}
+}
+
+function packageJsonHasBiomeDependency(packageJsonPath: string): boolean {
+	if (!existsSync(packageJsonPath)) return false;
+
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
+		if (!isRecord(parsed)) return false;
+		return ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].some((field) => {
+			const dependencies = parsed[field];
+			return isRecord(dependencies) && BIOME_PACKAGE_NAME in dependencies;
+		});
+	} catch {
+		return false;
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export interface ServerStatus {
