@@ -96,6 +96,9 @@ export class LspClientTransport {
 			const items = parseConfigurationItems(params);
 			return items.map((item) => {
 				if (item.section === "json") return { validate: { enable: true } };
+				if (this.server.id === "rust" && item.section === "rust-analyzer") {
+					return this.server.initialization ?? {};
+				}
 				return {};
 			});
 		});
