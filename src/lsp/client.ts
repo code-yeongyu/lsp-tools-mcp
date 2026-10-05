@@ -117,7 +117,9 @@ export class LspClient extends LspClientConnection {
 		if (!(error instanceof Error)) return false;
 		const code = "code" in error && typeof error.code === "number" ? error.code : undefined;
 		if (code === -32601) return true;
-		return /unsupported|not supported|method not found|unknown request/i.test(error.message);
+		return /unsupported|not supported|method not found|unknown request|unhandled method textDocument\/diagnostic/i.test(
+			error.message,
+		);
 	}
 
 	async diagnostics(filePath: string): Promise<{ items: Diagnostic[] }> {
@@ -136,6 +138,7 @@ export class LspClient extends LspClientConnection {
 		} catch (error) {
 			if (!this.isUnsupportedDiagnosticPullError(error)) {
 				this.diagnosticPullErrors.push(error instanceof Error ? error : new Error(String(error)));
+				throw error;
 			}
 		}
 
