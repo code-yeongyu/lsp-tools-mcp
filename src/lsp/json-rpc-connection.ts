@@ -285,8 +285,10 @@ function jsonRpcErrorToError(value: unknown): Error {
 	if (!isJsonRpcObject(value)) return new Error("JSON-RPC request failed");
 	const message = typeof value["message"] === "string" ? value["message"] : "JSON-RPC request failed";
 	const error = new Error(message);
-	if (typeof value["code"] === "number") {
-		error.name = `JsonRpcError(${value["code"]})`;
+	const code = value["code"];
+	if (typeof code === "number") {
+		error.name = `JsonRpcError(${code})`;
+		return Object.assign(error, { code });
 	}
 	return error;
 }
