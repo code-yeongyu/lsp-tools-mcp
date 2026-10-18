@@ -59,7 +59,7 @@ export class LspClientConnection extends LspClientTransport {
 			},
 			initializationOptions: this.server.initialization,
 		});
-		await this.sendNotification("initialized");
+		await this.sendNotification("initialized", {});
 		await this.sendNotification("workspace/didChangeConfiguration", {
 			settings: { json: { validate: { enable: true } } },
 		});
